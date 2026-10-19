@@ -11,7 +11,8 @@ export const SURFACE = defineSurface({
   binding: "TRIPS_WORKER",
 
   forms: true,
-  backLink: true,
+  // A referrer back link needs a client script, which this surface does not ship.
+  backLink: false,
 
   indexable: false,
   ogType: "website",

@@ -44,8 +44,15 @@ id = "22eab6393c204147aa2bd1a722012f9e"
 
 [[env.stage.services]]
 binding = "TRIPS_WORKER"
-service = "rhapp-space-store-stage"
+service = "space-store-stage"
 entrypoint = "SpaceStoreTrips"
+
+# Member search and names in /trips/admin. Credential-bearing rows: src/people.ts
+# projects each to an id and a name. Every space keeps members in its store.
+[[env.stage.services]]
+binding = "MEMBER_ACCOUNTS"
+service = "space-store-stage"
+entrypoint = "SpaceStoreMemberAccounts"
 
 [[env.stage.services]]
 binding = "MANAGE_WORKER"
@@ -70,8 +77,15 @@ id = "797a4d2c41884036bb02ce40cf2145bc"
 
 [[env.prod.services]]
 binding = "TRIPS_WORKER"
-service = "rhapp-space-store-prod"
+service = "space-store-prod"
 entrypoint = "SpaceStoreTrips"
+
+# Member search and names in /trips/admin. Credential-bearing rows: src/people.ts
+# projects each to an id and a name. Every space keeps members in its store.
+[[env.prod.services]]
+binding = "MEMBER_ACCOUNTS"
+service = "space-store-prod"
+entrypoint = "SpaceStoreMemberAccounts"
 
 [[env.prod.services]]
 binding = "MANAGE_WORKER"

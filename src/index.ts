@@ -112,7 +112,7 @@ function renderTripDetail(
         <p class="type">${SEGMENT_GLYPH[seg.type] ?? "•"} ${esc(seg.type)}</p>
         <h3>${esc(seg.label)}</h3>
         ${seg.start_at || seg.end_at
-          ? `<p class="when">${[seg.start_at, seg.end_at].filter(Boolean).map(esc).join(" → ")}</p>`
+          ? `<p class="when">${[seg.start_at, seg.end_at].filter((v): v is string => Boolean(v)).map(esc).join(" → ")}</p>`
           : ""}
         ${seg.location ? `<p class="when">📍 ${esc(seg.location)}</p>` : ""}
         ${seg.confirmation_ref ? `<p class="when">Ref: ${esc(seg.confirmation_ref)}</p>` : ""}

@@ -1,15 +1,17 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import {
   defineSurface,
   escapeHtml as esc,
   renderDocument,
   renderState,
 } from "../../space-surface/src";
+import type { ManagementArea } from "../../space-surface/src/management";
 import { roleLevel } from "../../sets/sets/auth/shared/role-hierarchy";
+import { people, type People, type Person } from "./people";
 import { callTrips } from "./trips";
 import { scope, type Scope } from "./scope";
 import { SURFACE } from "./surface";
-import type { Env, SegmentRow, MemberRow, TripRow } from "./types";
+import type { Env, MemberRow, SegmentRow, TripDetail, TripRow } from "./types";
 
 export function canManageTrips(role: string | null): boolean {
   return role !== null && role !== "owner" && roleLevel(role) >= roleLevel("staff");
@@ -17,14 +19,57 @@ export function canManageTrips(role: string | null): boolean {
 
 const ADMIN_SURFACE = defineSurface({
   ...SURFACE,
+  clientScriptPath: undefined,
   profiles: [],
   backLink: false,
   indexable: false,
   forms: true,
 });
 
+// "trips" is not yet a MANAGEMENT_DESTINATIONS slug in space-surface. The bar
+// renders without it (Space › page title, "View space"); register it there to
+// get the Trips crumb and hub entry.
+const MANAGEMENT = "trips" as ManagementArea;
+
 const ROOT = "/trips/admin";
 const TRP = /^trp_[0-9A-Za-z]{26}$/;
+const TSEG = /^tseg_[0-9A-Za-z]{26}$/;
+const DATE = /^\d{4}-\d{2}-\d{2}$/;
+const DATETIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/;
+
+const STATUSES: [TripRow["status"], string][] = [
+  ["draft", "Draft"],
+  ["active", "Active"],
+  ["archived", "Archived"],
+];
+const VISIBILITIES: [TripRow["visibility"], string][] = [
+  ["members", "Members of this space"],
+  ["private", "Only people on this trip"],
+  ["public", "Anyone, including visitors"],
+];
+const SEGMENT_TYPES: [SegmentRow["type"], string][] = [
+  ["flight", "Flight"],
+  ["hotel", "Hotel"],
+  ["car", "Car"],
+  ["activity", "Activity"],
+  ["other", "Other"],
+];
+const MEMBER_ROLES: [MemberRow["role"], string][] = [
+  ["traveler", "Traveler"],
+  ["owner", "Owner"],
+  ["viewer", "Viewer"],
+];
+
+const DONE: Record<string, string> = {
+  created: "Trip created. Add its itinerary and travelers below.",
+  saved: "Trip saved.",
+  "segment-added": "Added to the itinerary.",
+  "segment-saved": "Itinerary item saved.",
+  "segment-removed": "Removed from the itinerary.",
+  "member-saved": "Traveler saved.",
+  "member-removed": "Removed from the trip.",
+  deleted: "Trip deleted.",
+};
 
 const CSS = `
 :root{--wrap:720px}
@@ -37,20 +82,43 @@ const CSS = `
 .admin-status{display:inline-block;font-size:14px;font-weight:700;
   padding:5px 10px;background:var(--soft);border-radius:8px}
 .admin-actions{display:flex;flex-wrap:wrap;gap:12px;margin:18px 0}
-.admin-actions a{min-height:48px;display:inline-flex;align-items:center;justify-content:center;
-  padding:10px 16px;border:1px solid var(--rule);border-radius:12px;text-decoration:none;
-  background:var(--raised);color:var(--ink);font-weight:650}
-.admin-segment{border:1px solid var(--rule);border-radius:12px;padding:12px;margin:8px 0}
+.admin-actions a,.admin-actions button,.admin-row button,.admin-row a{min-height:48px;display:inline-flex;
+  align-items:center;justify-content:center;padding:10px 16px;border:1px solid var(--rule);border-radius:12px;
+  text-decoration:none;background:var(--raised);color:var(--ink);font:inherit;font-weight:650;cursor:pointer}
+.admin-actions .primary{background:var(--brand);border-color:var(--brand);color:var(--on-brand,#fff)}
+.admin-danger{background:#9c2525!important;color:white!important;border-color:#9c2525!important}
+.admin-notice{padding:16px;border:1px solid var(--rule);border-radius:12px;background:var(--soft);margin:16px 0}
+.admin-error{padding:16px;border:1px solid #9c2525;border-radius:12px;margin:16px 0}
+.admin-form{display:grid;gap:16px;margin:20px 0}
+.admin-field{display:grid;gap:6px}.admin-field>span{font-weight:700}
+.admin-field small{color:var(--muted)}
+.admin-field input,.admin-field select,.admin-field textarea,.admin-row select{width:100%;min-height:48px;
+  background:var(--raised);color:var(--ink);border:1px solid var(--rule);border-radius:10px;padding:10px;font:inherit}
+.admin-field textarea{min-height:110px}
+.admin-pair{display:grid;gap:16px}@media(min-width:560px){.admin-pair{grid-template-columns:1fr 1fr}}
+.admin-section{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:28px 0 8px}
+.admin-section h2{margin:0}
+.admin-segment{border:1px solid var(--rule);border-radius:12px;padding:12px;margin:8px 0;overflow-wrap:anywhere}
 .admin-segment .type{font-size:11px;font-weight:800;letter-spacing:.08em;
   text-transform:uppercase;color:var(--brand);margin:0 0 4px}
-.admin-members{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
-.admin-member{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;
-  border:1px solid var(--rule);border-radius:999px;background:var(--raised);font-size:14px}
-a:focus-visible,button:focus-visible{outline:3px solid var(--brand);outline-offset:3px}
+.admin-segment .admin-actions{margin:10px 0 0}
+.admin-people{list-style:none;padding:0;margin:8px 0;display:grid;gap:8px}
+.admin-person{border:1px solid var(--rule);border-radius:12px;padding:12px;overflow-wrap:anywhere}
+.admin-person small{color:var(--muted)}
+.admin-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;align-items:center}
+.admin-row select{width:auto;flex:1 1 140px}
+.visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{
+  outline:3px solid var(--brand);outline-offset:3px}
 `.trim();
 
 type AdminEnv = { Bindings: Env; Variables: { adminScope: Scope } };
+type AdminContext = Context<AdminEnv>;
+type Form = Record<string, string>;
+
 export const admin = new Hono<AdminEnv>();
+
+// ── Rendering helpers ───────────────────────────────────────────────────────
 
 function adminPage(
   s: Scope,
@@ -58,18 +126,20 @@ function adminPage(
   title: string,
   content: string,
   status = 200,
+  back = ROOT,
 ): Response {
   return renderDocument({
-    management: "trips",
+    management: MANAGEMENT,
     surface: ADMIN_SURFACE,
     space: s.space,
     viewer: s.viewer,
     origin: s.origin,
     menu: s.menu,
     title,
-    barTitle: "Manage trips",
+    barTitle: path === ROOT ? "Manage trips" : title,
     canonicalPath: path,
-    backPath: ROOT,
+    backPath: back,
+    trail: path === ROOT ? undefined : [{ label: "Manage trips", href: ROOT }],
     localNav: [
       { href: ROOT, label: "All trips" },
       { href: "/trips", label: "View trips" },
@@ -82,10 +152,37 @@ function adminPage(
   });
 }
 
+function failure(s: Scope, path: string, status: number): Response {
+  if (status === 404) {
+    return adminPage(
+      s,
+      path,
+      "Not found",
+      renderState("Not found", "That trip or item no longer exists. It may have been deleted.", {
+        href: ROOT,
+        label: "All trips",
+      }),
+      404,
+    );
+  }
+  return adminPage(
+    s,
+    path,
+    "Trips unavailable",
+    renderState("Trips unavailable", "Trips could not be reached just now. Nothing was changed. Please try again.", {
+      href: ROOT,
+      label: "All trips",
+    }),
+    status >= 500 ? status : 503,
+  );
+}
+
+function label<T extends string>(choices: [T, string][], value: string): string {
+  return choices.find(([v]) => v === value)?.[1] ?? value;
+}
+
 function statusLabel(status: string): string {
-  if (status === "active") return "Active";
-  if (status === "archived") return "Archived";
-  return "Draft";
+  return label(STATUSES, status);
 }
 
 function dateRange(trip: TripRow): string {
@@ -93,6 +190,212 @@ function dateRange(trip: TripRow): string {
   if (trip.start_date) return `From ${trip.start_date}`;
   return "";
 }
+
+function when(value: string | null): string {
+  return value ? value.replace("T", " ") : "";
+}
+
+function notice(c: AdminContext): string {
+  const message = DONE[c.req.query("done") ?? ""];
+  return message ? `<p class="admin-notice" role="status">${esc(message)}</p>` : "";
+}
+
+function errorBox(message: string | undefined): string {
+  return message ? `<p class="admin-error" role="alert">${esc(message)}</p>` : "";
+}
+
+function field(name: string, text: string, control: string, hint = ""): string {
+  return `<label class="admin-field" for="f-${name}"><span>${esc(text)}</span>${control}${
+    hint ? `<small>${esc(hint)}</small>` : ""
+  }</label>`;
+}
+
+function input(name: string, value: string, attrs = ""): string {
+  return `<input id="f-${name}" name="${name}" value="${esc(value)}" ${attrs}>`;
+}
+
+function textarea(name: string, value: string, max: number): string {
+  return `<textarea id="f-${name}" name="${name}" maxlength="${max}">${esc(value)}</textarea>`;
+}
+
+function select(name: string, choices: [string, string][], current: string, id = `f-${name}`): string {
+  return `<select id="${id}" name="${name}">${choices
+    .map(([v, t]) => `<option value="${esc(v)}"${v === current ? " selected" : ""}>${esc(t)}</option>`)
+    .join("")}</select>`;
+}
+
+function newId(prefix: "trp_" | "tseg_"): string {
+  const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+  // 248 = 4 × 62: rejecting bytes above it keeps every character equally likely.
+  const out: string[] = [];
+  while (out.length < 26) {
+    for (const byte of crypto.getRandomValues(new Uint8Array(32))) {
+      if (byte < 248 && out.length < 26) out.push(alphabet[byte % 62]);
+    }
+  }
+  return prefix + out.join("");
+}
+
+async function readForm(c: AdminContext): Promise<Form> {
+  const body = await c.req.parseBody();
+  const form: Form = {};
+  for (const [key, value] of Object.entries(body)) form[key] = typeof value === "string" ? value.trim() : "";
+  return form;
+}
+
+/** A store refusal the person can fix (bad input, conflict) versus an outage. */
+function fixable(status: number): boolean {
+  return status === 400 || status === 409;
+}
+
+async function loadTrip(c: AdminContext, s: Scope, id: string) {
+  return callTrips<TripDetail | null>(c.env, s.gn, "get", [id]);
+}
+
+// ── Validation ──────────────────────────────────────────────────────────────
+
+function validDate(value: string): boolean {
+  if (!DATE.test(value)) return false;
+  const d = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().startsWith(value);
+}
+
+function tripWrite(form: Form): { write?: Record<string, unknown>; error?: string } {
+  const title = form.title ?? "";
+  if (!title) return { error: "Give the trip a name, like “Spring tour 2027”." };
+  if (title.length > 200) return { error: "Keep the trip name to 200 characters or fewer." };
+  const description = form.description ?? "";
+  if (description.length > 4000) return { error: "Keep the description to 4,000 characters or fewer." };
+  const start = form.start_date ?? "";
+  const end = form.end_date ?? "";
+  for (const [value, which] of [[start, "start"], [end, "end"]] as const) {
+    if (value && !validDate(value)) return { error: `The ${which} date isn't a real date. Pick it from the calendar.` };
+  }
+  if (start && end && end < start) return { error: "The trip ends before it starts. Check the two dates." };
+  if (!STATUSES.some(([v]) => v === form.status)) return { error: "Choose a status from the list." };
+  if (!VISIBILITIES.some(([v]) => v === form.visibility)) return { error: "Choose who can see this trip." };
+  return {
+    write: {
+      title,
+      description: description || null,
+      status: form.status,
+      start_date: start || null,
+      end_date: end || null,
+      visibility: form.visibility,
+    },
+  };
+}
+
+function segmentWrite(form: Form): { write?: Record<string, unknown>; error?: string } {
+  if (!SEGMENT_TYPES.some(([v]) => v === form.type)) return { error: "Choose what kind of item this is." };
+  const itemLabel = form.label ?? "";
+  if (!itemLabel) return { error: "Give this item a short name, like “Flight to Denver”." };
+  if (itemLabel.length > 200) return { error: "Keep the name to 200 characters or fewer." };
+  const start = form.start_at ?? "";
+  const end = form.end_at ?? "";
+  for (const [value, which] of [[start, "start"], [end, "end"]] as const) {
+    if (value && !DATETIME.test(value)) return { error: `The ${which} time isn't complete. Pick a date and a time.` };
+  }
+  if (start && end && end < start) return { error: "This item ends before it starts. Check the two times." };
+  const limits: [string, string, number][] = [
+    ["location", "Location", 300],
+    ["confirmation_ref", "Confirmation number", 100],
+    ["notes", "Notes", 4000],
+  ];
+  for (const [key, name, max] of limits) {
+    if ((form[key] ?? "").length > max) return { error: `Keep ${name.toLowerCase()} to ${max.toLocaleString("en-US")} characters or fewer.` };
+  }
+  return {
+    write: {
+      type: form.type,
+      label: itemLabel,
+      start_at: start || null,
+      end_at: end || null,
+      location: form.location || null,
+      confirmation_ref: form.confirmation_ref || null,
+      notes: form.notes || null,
+    },
+  };
+}
+
+// ── Forms ───────────────────────────────────────────────────────────────────
+
+function tripFormValues(trip?: TripRow): Form {
+  return {
+    title: trip?.title ?? "",
+    description: trip?.description ?? "",
+    start_date: trip?.start_date ?? "",
+    end_date: trip?.end_date ?? "",
+    status: trip?.status ?? "draft",
+    visibility: trip?.visibility ?? "members",
+  };
+}
+
+function tripForm(action: string, values: Form, submit: string, cancel: string, error?: string): string {
+  return `${errorBox(error)}<form class="admin-form" method="post" action="${esc(action)}">
+    ${field("title", "Trip name", input("title", values.title, 'required maxlength="200" autocomplete="off"'))}
+    ${field("description", "Description", textarea("description", values.description, 4000), "Optional. Shown to everyone who can see the trip.")}
+    <div class="admin-pair">
+      ${field("start_date", "Starts", input("start_date", values.start_date, 'type="date"'))}
+      ${field("end_date", "Ends", input("end_date", values.end_date, 'type="date"'))}
+    </div>
+    ${field("visibility", "Who can see it", select("visibility", VISIBILITIES, values.visibility))}
+    ${field("status", "Status", select("status", STATUSES, values.status), "Archive a trip once it's over.")}
+    <div class="admin-actions"><button class="primary" type="submit">${esc(submit)}</button><a href="${esc(cancel)}">Cancel</a></div>
+  </form>`;
+}
+
+function segmentFormValues(seg?: SegmentRow): Form {
+  return {
+    type: seg?.type ?? "flight",
+    label: seg?.label ?? "",
+    start_at: seg?.start_at ?? "",
+    end_at: seg?.end_at ?? "",
+    location: seg?.location ?? "",
+    confirmation_ref: seg?.confirmation_ref ?? "",
+    notes: seg?.notes ?? "",
+  };
+}
+
+function segmentForm(action: string, values: Form, submit: string, cancel: string, error?: string): string {
+  return `${errorBox(error)}<form class="admin-form" method="post" action="${esc(action)}">
+    ${field("type", "Kind", select("type", SEGMENT_TYPES, values.type))}
+    ${field("label", "Name", input("label", values.label, 'required maxlength="200" autocomplete="off"'), "For example “Flight to Denver” or “Hotel Monaco”.")}
+    <div class="admin-pair">
+      ${field("start_at", "Starts", input("start_at", values.start_at, 'type="datetime-local"'))}
+      ${field("end_at", "Ends", input("end_at", values.end_at, 'type="datetime-local"'))}
+    </div>
+    ${field("location", "Location", input("location", values.location, 'maxlength="300"'))}
+    ${field("confirmation_ref", "Confirmation number", input("confirmation_ref", values.confirmation_ref, 'maxlength="100" autocomplete="off"'))}
+    ${field("notes", "Notes", textarea("notes", values.notes, 4000))}
+    <div class="admin-actions"><button class="primary" type="submit">${esc(submit)}</button><a href="${esc(cancel)}">Cancel</a></div>
+  </form>`;
+}
+
+function confirmPage(
+  s: Scope,
+  path: string,
+  heading: string,
+  body: string,
+  confirmLabel: string,
+  keepLabel: string,
+  back: string,
+): Response {
+  return adminPage(
+    s,
+    path,
+    heading,
+    `<h1 class="admin-title">${esc(heading)}</h1>${body}
+     <form method="post" action="${esc(path)}"><div class="admin-actions">
+       <button class="admin-danger" type="submit">${esc(confirmLabel)}</button>
+       <a href="${esc(back)}">${esc(keepLabel)}</a>
+     </div></form>`,
+    200,
+    back,
+  );
+}
+
+// ── Middleware ──────────────────────────────────────────────────────────────
 
 admin.use("*", async (c, next) => {
   await next();
@@ -127,117 +430,515 @@ admin.use("*", async (c, next) => {
       403,
     );
   }
+  // Every write is a same-origin form post. A missing or foreign Origin never
+  // reaches the store.
+  if (c.req.method === "POST" && c.req.header("Origin") !== s.origin) {
+    return adminPage(
+      s,
+      path,
+      "Nothing was changed",
+      renderState("Nothing was changed", "Go back to the page, reload it, and try again.", {
+        href: ROOT,
+        label: "All trips",
+      }),
+      403,
+    );
+  }
   await next();
 });
 
+// ── Trip list ───────────────────────────────────────────────────────────────
+
 admin.get("/", async (c) => {
-  const s = c.get("adminScope") as Scope;
+  const s = c.get("adminScope");
   const result = await callTrips<TripRow[]>(c.env, s.gn, "list", [s.gn]);
-  if (!result.ok) {
-    return adminPage(
-      s,
-      ROOT,
-      "Trips unavailable",
-      renderState("Trips unavailable", "Could not load trips right now."),
-      result.status,
-    );
-  }
+  if (!result.ok) return failure(s, ROOT, result.status);
   const trips = result.value;
   const cards = trips.length
-    ? `<ul class="admin-list">${trips.map(t => {
-        const dates = dateRange(t);
-        return `<li><a class="admin-card" href="${ROOT}/${esc(t.id)}">
+    ? `<ul class="admin-list">${trips
+        .map((t) => {
+          const dates = dateRange(t);
+          return `<li><a class="admin-card" href="${ROOT}/${esc(t.id)}">
           <h2>${esc(t.title)}</h2>
           ${dates ? `<p>${esc(dates)}</p>` : ""}
           <span class="admin-status">${esc(statusLabel(t.status))}</span>
-          <p>View details →</p>
+          <p>Manage →</p>
         </a></li>`;
-      }).join("")}</ul>`
-    : "<p>No trips in this space yet.</p>";
+        })
+        .join("")}</ul>`
+    : "<p>No trips in this space yet. Create the first one.</p>";
   return adminPage(
     s,
     ROOT,
     "Manage trips",
-    `<h1 class="admin-title">Manage trips</h1>
+    `<h1 class="admin-title">Manage trips</h1>${notice(c)}
      <p class="admin-meta">${trips.length} trip${trips.length === 1 ? "" : "s"} in this space.</p>
+     <div class="admin-actions"><a class="primary" href="${ROOT}/new">New trip</a></div>
      ${cards}`,
   );
 });
 
-admin.get("/:id", async (c) => {
-  const s = c.get("adminScope") as Scope;
-  const id = c.req.param("id");
-  if (!TRP.test(id)) {
-    return adminPage(
-      s,
-      ROOT,
-      "Trip unavailable",
-      renderState("Trip unavailable", "That trip does not exist.", { href: ROOT, label: "All trips" }),
-      404,
-    );
-  }
-  const path = `${ROOT}/${id}`;
-  const result = await callTrips<{ trip: TripRow; segments: SegmentRow[]; members: MemberRow[] } | null>(
-    c.env,
-    s.gn,
-    "get",
-    [id],
+// ── Create ──────────────────────────────────────────────────────────────────
+
+function newTripPage(s: Scope, values: Form, error?: string, status = 200): Response {
+  return adminPage(
+    s,
+    `${ROOT}/new`,
+    "New trip",
+    `<h1 class="admin-title">New trip</h1>
+     <p class="admin-meta">You'll add the itinerary and travelers after it's created. You're added as its owner.</p>
+     ${tripForm(`${ROOT}/new`, values, "Create trip", ROOT, error)}`,
+    status,
   );
-  if (!result.ok || !result.value) {
-    return adminPage(
-      s,
-      path,
-      "Trip unavailable",
-      renderState("Trip unavailable", "That trip could not be loaded.", { href: ROOT, label: "All trips" }),
-      result.ok ? 404 : (result as { status: number }).status,
-    );
+}
+
+admin.get("/new", (c) => newTripPage(c.get("adminScope"), tripFormValues()));
+
+admin.post("/new", async (c) => {
+  const s = c.get("adminScope");
+  const form = await readForm(c);
+  const { write, error } = tripWrite(form);
+  if (!write) return newTripPage(s, form, error, 400);
+  if (!s.viewer.uid) return failure(s, `${ROOT}/new`, 503);
+  const id = newId("trp_");
+  const result = await callTrips<TripRow>(c.env, s.gn, "create", [id, s.gn, write, s.viewer.uid]);
+  if (!result.ok) {
+    return fixable(result.status) ? newTripPage(s, form, result.message, 400) : failure(s, `${ROOT}/new`, result.status);
   }
+  return c.redirect(`${ROOT}/${id}?done=created`, 303);
+});
+
+// ── Trip detail ─────────────────────────────────────────────────────────────
+
+async function names(c: AdminContext, s: Scope, members: MemberRow[]): Promise<Map<string, Person>> {
+  const directory = people(c.env, s.gn);
+  if (!directory || !members.length) return new Map();
+  try {
+    return await directory.find(members.map((m) => m.member_id));
+  } catch (error) {
+    console.error("[trips-admin] member names unavailable", (error as Error).message);
+    return new Map();
+  }
+}
+
+function memberName(m: MemberRow, known: Map<string, Person>): string {
+  const p = known.get(m.member_id);
+  return p ? `<strong>${esc(p.label)}</strong>` : `<strong>${esc(m.member_id)}</strong> <small>(member ID)</small>`;
+}
+
+admin.get("/:id", async (c) => {
+  const s = c.get("adminScope");
+  const id = c.req.param("id");
+  const path = `${ROOT}/${id}`;
+  if (!TRP.test(id)) return failure(s, ROOT, 404);
+  const result = await loadTrip(c, s, id);
+  if (!result.ok) return failure(s, path, result.status);
+  if (!result.value) return failure(s, path, 404);
   const { trip, segments, members } = result.value;
-  const dates = dateRange(trip);
+  const known = await names(c, s, members);
+  const base = `${ROOT}/${esc(id)}`;
+
   const segHtml = segments.length
-    ? segments.map(seg => `<div class="admin-segment">
-        <p class="type">${esc(seg.type)}</p>
+    ? segments
+        .map(
+          (seg) => `<div class="admin-segment">
+        <p class="type">${esc(label(SEGMENT_TYPES, seg.type))}</p>
         <strong>${esc(seg.label)}</strong>
-        ${seg.start_at
-          ? `<br><small>${esc(seg.start_at)}${seg.end_at ? ` → ${esc(seg.end_at)}` : ""}</small>`
-          : ""}
+        ${seg.start_at || seg.end_at ? `<br><small>${esc(when(seg.start_at))}${seg.end_at ? ` → ${esc(when(seg.end_at))}` : ""}</small>` : ""}
         ${seg.location ? `<br><small>📍 ${esc(seg.location)}</small>` : ""}
-        ${seg.confirmation_ref ? `<br><small>Ref: ${esc(seg.confirmation_ref)}</small>` : ""}
-      </div>`).join("")
-    : "<p>No segments.</p>";
+        ${seg.confirmation_ref ? `<br><small>Confirmation: ${esc(seg.confirmation_ref)}</small>` : ""}
+        <div class="admin-actions">
+          <a href="${base}/segments/${esc(seg.id)}/edit">Edit</a>
+          <a href="${base}/segments/${esc(seg.id)}/remove">Remove</a>
+        </div>
+      </div>`,
+        )
+        .join("")
+    : "<p>Nothing on the itinerary yet.</p>";
+
   const memHtml = members.length
-    ? `<div class="admin-members">${members.map(m =>
-        `<span class="admin-member">${esc(m.member_id)} <em>${esc(m.role)}</em></span>`
-      ).join("")}</div>`
-    : "<p>No members.</p>";
+    ? `<ul class="admin-people">${members
+        .map(
+          (m, i) => `<li class="admin-person">${memberName(m, known)}
+        <form class="admin-row" method="post" action="${base}/members">
+          <input type="hidden" name="member_id" value="${esc(m.member_id)}">
+          <label class="visually-hidden" for="role-${i}">Role</label>
+          ${select("role", MEMBER_ROLES, m.role, `role-${i}`)}
+          <button type="submit">Save role</button>
+          <a href="${base}/members/${encodeURIComponent(m.member_id)}/remove">Remove</a>
+        </form>
+      </li>`,
+        )
+        .join("")}</ul>`
+    : "<p>No one is on this trip yet.</p>";
+
   return adminPage(
     s,
     path,
     trip.title,
-    `<h1 class="admin-title">${esc(trip.title)}</h1>
-     <p class="admin-meta">${[dates, statusLabel(trip.status), trip.visibility].filter(Boolean).map(esc).join(" · ")}</p>
+    `<h1 class="admin-title">${esc(trip.title)}</h1>${notice(c)}
+     <p class="admin-meta">${[dateRange(trip), statusLabel(trip.status), label(VISIBILITIES, trip.visibility)]
+       .filter(Boolean)
+       .map(esc)
+       .join(" · ")}</p>
      ${trip.description ? `<p>${esc(trip.description)}</p>` : ""}
-     <h2>Segments (${segments.length})</h2>${segHtml}
-     <h2>Members (${members.length})</h2>${memHtml}
+     <div class="admin-actions">
+       <a href="${base}/edit">Edit trip</a>
+       <a href="/trips/${esc(id)}">View as a visitor</a>
+       <a href="${base}/delete">Delete trip</a>
+     </div>
+     <div class="admin-section"><h2>Itinerary (${segments.length})</h2></div>
+     ${segHtml}
+     <div class="admin-actions"><a class="primary" href="${base}/segments/new">Add to itinerary</a></div>
+     <div class="admin-section"><h2>Travelers (${members.length})</h2></div>
+     ${memHtml}
+     <div class="admin-actions"><a class="primary" href="${base}/members/add">Add a traveler</a></div>
      <div class="admin-actions"><a href="${ROOT}">Back to all trips</a></div>`,
   );
 });
 
-admin.notFound((c) => {
-  const s = c.get("adminScope") as Scope;
+// ── Edit / delete trip ──────────────────────────────────────────────────────
+
+function editTripPage(s: Scope, id: string, title: string, values: Form, error?: string, status = 200): Response {
+  const base = `${ROOT}/${id}`;
   return adminPage(
     s,
-    ROOT,
-    "Not found",
-    renderState("Not found", "That page does not exist.", { href: ROOT, label: "All trips" }),
-    404,
+    `${base}/edit`,
+    `Edit ${title}`,
+    `<h1 class="admin-title">Edit trip</h1>${tripForm(`${base}/edit`, values, "Save trip", base, error)}`,
+    status,
+    base,
+  );
+}
+
+admin.get("/:id/edit", async (c) => {
+  const s = c.get("adminScope");
+  const id = c.req.param("id");
+  if (!TRP.test(id)) return failure(s, ROOT, 404);
+  const result = await loadTrip(c, s, id);
+  if (!result.ok) return failure(s, `${ROOT}/${id}/edit`, result.status);
+  if (!result.value) return failure(s, `${ROOT}/${id}/edit`, 404);
+  return editTripPage(s, id, result.value.trip.title, tripFormValues(result.value.trip));
+});
+
+admin.post("/:id/edit", async (c) => {
+  const s = c.get("adminScope");
+  const id = c.req.param("id");
+  const path = `${ROOT}/${id}/edit`;
+  if (!TRP.test(id)) return failure(s, ROOT, 404);
+  const form = await readForm(c);
+  const { write, error } = tripWrite(form);
+  if (!write) return editTripPage(s, id, form.title || "trip", form, error, 400);
+  const result = await callTrips<TripRow>(c.env, s.gn, "update", [id, write, s.viewer.uid]);
+  if (!result.ok) {
+    return fixable(result.status)
+      ? editTripPage(s, id, form.title || "trip", form, result.message, 400)
+      : failure(s, path, result.status);
+  }
+  return c.redirect(`${ROOT}/${id}?done=saved`, 303);
+});
+
+admin.get("/:id/delete", async (c) => {
+  const s = c.get("adminScope");
+  const id = c.req.param("id");
+  const path = `${ROOT}/${id}/delete`;
+  if (!TRP.test(id)) return failure(s, ROOT, 404);
+  const result = await loadTrip(c, s, id);
+  if (!result.ok) return failure(s, path, result.status);
+  if (!result.value) return failure(s, path, 404);
+  const { trip, segments, members } = result.value;
+  const items = `${segments.length} itinerary item${segments.length === 1 ? "" : "s"}`;
+  const travelers = `${members.length} traveler${members.length === 1 ? "" : "s"}`;
+  return confirmPage(
+    s,
+    path,
+    "Delete this trip?",
+    `<p><strong>${esc(trip.title)}</strong> will be deleted with its ${items} and its list of ${travelers}.</p>
+     <p>This can't be undone. To keep it for the record instead, edit the trip and set its status to Archived.</p>`,
+    "Delete trip",
+    "Keep trip",
+    `${ROOT}/${id}`,
   );
 });
+
+admin.post("/:id/delete", async (c) => {
+  const s = c.get("adminScope");
+  const id = c.req.param("id");
+  if (!TRP.test(id)) return failure(s, ROOT, 404);
+  const result = await callTrips<{ deleted: boolean }>(c.env, s.gn, "delete", [id, s.viewer.uid]);
+  if (!result.ok) return failure(s, `${ROOT}/${id}/delete`, result.status);
+  if (!result.value.deleted) return failure(s, `${ROOT}/${id}/delete`, 404);
+  return c.redirect(`${ROOT}?done=deleted`, 303);
+});
+
+// ── Itinerary items ─────────────────────────────────────────────────────────
+
+function segmentPage(
+  s: Scope,
+  trip: TripRow,
+  path: string,
+  heading: string,
+  values: Form,
+  submit: string,
+  error?: string,
+  status = 200,
+): Response {
+  const base = `${ROOT}/${trip.id}`;
+  return adminPage(
+    s,
+    path,
+    heading,
+    `<p class="admin-meta">${esc(trip.title)}</p><h1 class="admin-title">${esc(heading)}</h1>
+     ${segmentForm(path, values, submit, base, error)}`,
+    status,
+    base,
+  );
+}
+
+/** Loads the trip and, when asked, the segment, which must belong to it. */
+async function tripAndSegment(c: AdminContext, s: Scope, path: string, withSegment: boolean) {
+  const id = c.req.param("id") ?? "";
+  const sid = c.req.param("sid") ?? "";
+  if (!TRP.test(id) || (withSegment && !TSEG.test(sid))) return { response: failure(s, ROOT, 404) };
+  const result = await loadTrip(c, s, id);
+  if (!result.ok) return { response: failure(s, path, result.status) };
+  if (!result.value) return { response: failure(s, path, 404) };
+  const segment = withSegment ? result.value.segments.find((seg) => seg.id === sid) : undefined;
+  if (withSegment && !segment) return { response: failure(s, path, 404) };
+  return { detail: result.value, segment };
+}
+
+admin.get("/:id/segments/new", async (c) => {
+  const s = c.get("adminScope");
+  const path = new URL(c.req.url).pathname;
+  const { response, detail } = await tripAndSegment(c, s, path, false);
+  if (response) return response;
+  return segmentPage(s, detail!.trip, path, "Add to itinerary", segmentFormValues(), "Add to itinerary");
+});
+
+admin.post("/:id/segments/new", async (c) => {
+  const s = c.get("adminScope");
+  const path = new URL(c.req.url).pathname;
+  const { response, detail } = await tripAndSegment(c, s, path, false);
+  if (response) return response;
+  const trip = detail!.trip;
+  const form = await readForm(c);
+  const { write, error } = segmentWrite(form);
+  if (!write) return segmentPage(s, trip, path, "Add to itinerary", form, "Add to itinerary", error, 400);
+  const result = await callTrips<SegmentRow>(c.env, s.gn, "addSegment", [newId("tseg_"), trip.id, write]);
+  if (!result.ok) {
+    return fixable(result.status)
+      ? segmentPage(s, trip, path, "Add to itinerary", form, "Add to itinerary", result.message, 400)
+      : failure(s, path, result.status);
+  }
+  return c.redirect(`${ROOT}/${trip.id}?done=segment-added`, 303);
+});
+
+admin.get("/:id/segments/:sid/edit", async (c) => {
+  const s = c.get("adminScope");
+  const path = new URL(c.req.url).pathname;
+  const { response, detail, segment } = await tripAndSegment(c, s, path, true);
+  if (response) return response;
+  return segmentPage(s, detail!.trip, path, "Edit itinerary item", segmentFormValues(segment), "Save item");
+});
+
+admin.post("/:id/segments/:sid/edit", async (c) => {
+  const s = c.get("adminScope");
+  const path = new URL(c.req.url).pathname;
+  const { response, detail, segment } = await tripAndSegment(c, s, path, true);
+  if (response) return response;
+  const trip = detail!.trip;
+  const form = await readForm(c);
+  const { write, error } = segmentWrite(form);
+  if (!write) return segmentPage(s, trip, path, "Edit itinerary item", form, "Save item", error, 400);
+  const result = await callTrips<SegmentRow>(c.env, s.gn, "updateSegment", [segment!.id, write]);
+  if (!result.ok) {
+    return fixable(result.status)
+      ? segmentPage(s, trip, path, "Edit itinerary item", form, "Save item", result.message, 400)
+      : failure(s, path, result.status);
+  }
+  return c.redirect(`${ROOT}/${trip.id}?done=segment-saved`, 303);
+});
+
+admin.get("/:id/segments/:sid/remove", async (c) => {
+  const s = c.get("adminScope");
+  const path = new URL(c.req.url).pathname;
+  const { response, detail, segment } = await tripAndSegment(c, s, path, true);
+  if (response) return response;
+  return confirmPage(
+    s,
+    path,
+    "Remove from itinerary?",
+    `<p><strong>${esc(segment!.label)}</strong> will be removed from <strong>${esc(detail!.trip.title)}</strong>. This can't be undone.</p>`,
+    "Remove item",
+    "Keep item",
+    `${ROOT}/${detail!.trip.id}`,
+  );
+});
+
+admin.post("/:id/segments/:sid/remove", async (c) => {
+  const s = c.get("adminScope");
+  const path = new URL(c.req.url).pathname;
+  const { response, detail, segment } = await tripAndSegment(c, s, path, true);
+  if (response) return response;
+  const result = await callTrips<{ deleted: boolean }>(c.env, s.gn, "removeSegment", [segment!.id]);
+  if (!result.ok) return failure(s, path, result.status);
+  return c.redirect(`${ROOT}/${detail!.trip.id}?done=segment-removed`, 303);
+});
+
+// ── Travelers ───────────────────────────────────────────────────────────────
+
+const MEMBER_ID_MAX = 256;
+
+function addTravelerPage(
+  s: Scope,
+  trip: TripRow,
+  members: MemberRow[],
+  query: string,
+  results: Person[] | null,
+  unavailable: boolean,
+  error?: string,
+  status = 200,
+): Response {
+  const base = `${ROOT}/${trip.id}`;
+  const path = `${base}/members/add`;
+  const onTrip = new Set(members.map((m) => m.member_id));
+  let body: string;
+  if (results === null) {
+    // No member directory: enter an ID by hand.
+    body = `${unavailable ? '<p class="admin-notice">The member list can\'t be searched right now. You can still add someone by their member ID.</p>' : ""}
+      <form class="admin-form" method="post" action="${esc(base)}/members">
+        ${field("member_id", "Member ID", input("member_id", "", `required maxlength="${MEMBER_ID_MAX}" autocomplete="off"`), "The person's ID from the space's member list.")}
+        ${field("role", "Role", select("role", MEMBER_ROLES, "traveler"))}
+        <div class="admin-actions"><button class="primary" type="submit">Add traveler</button><a href="${esc(base)}">Cancel</a></div>
+      </form>`;
+  } else {
+    const list = results.length
+      ? `<ul class="admin-people">${results
+          .map((p, i) =>
+            onTrip.has(p.id)
+              ? `<li class="admin-person"><strong>${esc(p.label)}</strong> <small>Already on this trip</small></li>`
+              : `<li class="admin-person"><strong>${esc(p.label)}</strong>
+            <form class="admin-row" method="post" action="${esc(base)}/members">
+              <input type="hidden" name="member_id" value="${esc(p.id)}">
+              <label class="visually-hidden" for="add-role-${i}">Role</label>
+              ${select("role", MEMBER_ROLES, "traveler", `add-role-${i}`)}
+              <button type="submit">Add</button>
+            </form></li>`,
+          )
+          .join("")}</ul>`
+      : `<p>No members match “${esc(query)}”. Try part of their username or email.</p>`;
+    body = `<form class="admin-form" method="get" action="${esc(path)}" role="search">
+        ${field("q", "Find a member", input("q", query, 'type="search" maxlength="100" autocomplete="off"'), "Search by username or email.")}
+        <div class="admin-actions"><button type="submit">Search</button></div>
+      </form>${list}
+      <div class="admin-actions"><a href="${esc(base)}">Done</a></div>`;
+  }
+  return adminPage(
+    s,
+    path,
+    "Add a traveler",
+    `<p class="admin-meta">${esc(trip.title)}</p><h1 class="admin-title">Add a traveler</h1>${errorBox(error)}${body}`,
+    status,
+    base,
+  );
+}
+
+async function searchPeople(directory: People | null, query: string): Promise<{ results: Person[] | null; unavailable: boolean }> {
+  if (!directory) return { results: null, unavailable: false };
+  try {
+    return { results: await directory.search(query), unavailable: false };
+  } catch (error) {
+    console.error("[trips-admin] member search unavailable", (error as Error).message);
+    return { results: null, unavailable: true };
+  }
+}
+
+admin.get("/:id/members/add", async (c) => {
+  const s = c.get("adminScope");
+  const path = new URL(c.req.url).pathname;
+  const { response, detail } = await tripAndSegment(c, s, path, false);
+  if (response) return response;
+  const query = (c.req.query("q") ?? "").trim().slice(0, 100);
+  const { results, unavailable } = await searchPeople(people(c.env, s.gn), query);
+  return addTravelerPage(s, detail!.trip, detail!.members, query, results, unavailable);
+});
+
+admin.post("/:id/members", async (c) => {
+  const s = c.get("adminScope");
+  const path = new URL(c.req.url).pathname;
+  const { response, detail } = await tripAndSegment(c, s, path, false);
+  if (response) return response;
+  const { trip, members } = detail!;
+  const form = await readForm(c);
+  const memberId = form.member_id ?? "";
+  const role = form.role ?? "";
+  const retry = async (message: string) => {
+    const { results, unavailable } = await searchPeople(people(c.env, s.gn), "");
+    return addTravelerPage(s, trip, members, "", results, unavailable, message, 400);
+  };
+  if (!memberId || memberId.length > MEMBER_ID_MAX) return retry("Choose a member to add.");
+  if (!MEMBER_ROLES.some(([v]) => v === role)) return retry("Choose a role from the list.");
+  // With a directory, only enabled members of this space can be added. A role
+  // change for someone already on the trip skips the lookup.
+  const directory = people(c.env, s.gn);
+  if (directory && !members.some((m) => m.member_id === memberId)) {
+    let found: Map<string, Person>;
+    try {
+      found = await directory.find([memberId]);
+    } catch {
+      return failure(s, path, 503);
+    }
+    if (!found.has(memberId)) return retry("That person isn't an active member of this space.");
+  }
+  const result = await callTrips<MemberRow>(c.env, s.gn, "setMember", [trip.id, memberId, role]);
+  if (!result.ok) return fixable(result.status) ? retry(result.message) : failure(s, path, result.status);
+  return c.redirect(`${ROOT}/${trip.id}?done=member-saved`, 303);
+});
+
+async function memberContext(c: AdminContext, s: Scope, path: string) {
+  const { response, detail } = await tripAndSegment(c, s, path, false);
+  if (response) return { response };
+  const memberId = c.req.param("mid") ?? "";
+  const member = detail!.members.find((m) => m.member_id === memberId);
+  if (!member) return { response: failure(s, path, 404) };
+  return { detail: detail!, member };
+}
+
+admin.get("/:id/members/:mid/remove", async (c) => {
+  const s = c.get("adminScope");
+  const path = new URL(c.req.url).pathname;
+  const { response, detail, member } = await memberContext(c, s, path);
+  if (response) return response;
+  const known = await names(c, s, [member!]);
+  return confirmPage(
+    s,
+    path,
+    "Remove from trip?",
+    `<p>${memberName(member!, known)} will be removed from <strong>${esc(detail!.trip.title)}</strong>.
+     ${detail!.trip.visibility === "private" ? " This trip is private, so they won't be able to see it any more." : ""}</p>`,
+    "Remove from trip",
+    "Keep on trip",
+    `${ROOT}/${detail!.trip.id}`,
+  );
+});
+
+admin.post("/:id/members/:mid/remove", async (c) => {
+  const s = c.get("adminScope");
+  const path = new URL(c.req.url).pathname;
+  const { response, detail, member } = await memberContext(c, s, path);
+  if (response) return response;
+  const result = await callTrips<{ deleted: boolean }>(c.env, s.gn, "removeMember", [detail!.trip.id, member!.member_id]);
+  if (!result.ok) return failure(s, path, result.status);
+  return c.redirect(`${ROOT}/${detail!.trip.id}?done=member-removed`, 303);
+});
+
+// ── Fallbacks ───────────────────────────────────────────────────────────────
+
+admin.notFound((c) => failure(c.get("adminScope"), ROOT, 404));
 
 admin.onError((error, c) => {
   console.error("[trips-admin]", error);
   const s = c.get("adminScope") as Scope | undefined;
-  return s
-    ? adminPage(s, ROOT, "Error", renderState("Error", "Trip management is temporarily unavailable."), 503)
-    : c.text("Trip management is temporarily unavailable.", 503);
+  return s ? failure(s, ROOT, 503) : c.text("Trip management is temporarily unavailable.", 503);
 });

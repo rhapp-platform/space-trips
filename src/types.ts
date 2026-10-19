@@ -6,9 +6,21 @@ export interface TripsService {
   trips(gn: string, op: string, args?: unknown[]): Promise<TripsResult<unknown>>;
 }
 
+export type MemberResult<T> = { ok: true; value: T } | { ok: false; status: number; message: string };
+export type MemberPermit = { permit_id: string; epoch: number; backend: "d1" | "store"; operation: "read" | "write" };
+
+/** space-store SpaceStoreMemberAccounts. Credential-bearing: see people.ts. */
+export interface MemberAccounts {
+  begin(gn: string, operation: "read"): Promise<MemberResult<MemberPermit>>;
+  finish(gn: string, permit: MemberPermit): Promise<MemberResult<boolean>>;
+  account(gn: string, permit: MemberPermit, operation: string, args: unknown[]): Promise<MemberResult<unknown>>;
+}
+
 export interface Env extends SurfaceEnv {
   TRIPS_WORKER: TripsService;
   MANAGE_WORKER?: Fetcher;
+  /** Optional: enables member search and names in the admin. */
+  MEMBER_ACCOUNTS?: MemberAccounts;
 }
 
 export interface TripRow {
