@@ -1,0 +1,22 @@
+{
+  "name": "space-trips",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "deploy:stage": "wrangler deploy --env stage",
+    "deploy:prod": "wrangler deploy --env prod"
+  },
+  "dependencies": {
+    "hono": "^4.6.14"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241205.0",
+    "@types/bun": "^1.1.14",
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2",
+    "wrangler": "^3.95.0"
+  }
+}

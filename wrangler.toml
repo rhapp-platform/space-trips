@@ -1,0 +1,81 @@
+# space-trips — the space-level trip itinerary surface.
+#
+# Serves {space}.rhapp.app/trips. The space is resolved from the HOSTNAME,
+# not the path, exactly as other space-* workers resolve it.
+
+name = "rhapp-space-trips-local"
+main = "src/index.ts"
+compatibility_date = "2024-11-19"
+compatibility_flags = ["nodejs_compat"]
+
+[dev]
+port = 8799
+local_protocol = "http"
+
+[vars]
+ENVIRONMENT = "local"
+WORKER_VERSION = "0.1.0"
+
+# Secrets, via .dev.vars locally:
+#   RHAP_MASTER_SECRET    mints the synthetic space certificate
+#   AUTH_SESSION_SECRET   verifies the rhauth-role space session
+
+[[kv_namespaces]]
+binding = "APPS"
+id = "797a4d2c41884036bb02ce40cf2145bc"
+preview_id = "797a4d2c41884036bb02ce40cf2145bc"
+
+# ============================================================================
+[env.stage]
+name = "rhapp-space-trips-stage"
+
+routes = [
+  { pattern = "*.rhapp.work/trips", zone_id = "e2b5a1989b063519e57e63ff13c9d58b" },
+  { pattern = "*.rhapp.work/trips/*", zone_id = "e2b5a1989b063519e57e63ff13c9d58b" }
+]
+
+[env.stage.vars]
+ENVIRONMENT = "stage"
+WORKER_VERSION = "0.1.0"
+
+[[env.stage.kv_namespaces]]
+binding = "APPS"
+id = "22eab6393c204147aa2bd1a722012f9e"
+
+[[env.stage.services]]
+binding = "TRIPS_WORKER"
+service = "rhapp-space-store-stage"
+entrypoint = "SpaceStoreTrips"
+
+[[env.stage.services]]
+binding = "MANAGE_WORKER"
+service = "rhapp-space-manage-stage"
+
+# ============================================================================
+[env.prod]
+name = "rhapp-space-trips-prod"
+
+routes = [
+  { pattern = "*.rhapp.app/trips", zone_id = "d9b23864005da27cf9a519ba2f428203" },
+  { pattern = "*.rhapp.app/trips/*", zone_id = "d9b23864005da27cf9a519ba2f428203" }
+]
+
+[env.prod.vars]
+ENVIRONMENT = "production"
+WORKER_VERSION = "0.1.0"
+
+[[env.prod.kv_namespaces]]
+binding = "APPS"
+id = "797a4d2c41884036bb02ce40cf2145bc"
+
+[[env.prod.services]]
+binding = "TRIPS_WORKER"
+service = "rhapp-space-store-prod"
+entrypoint = "SpaceStoreTrips"
+
+[[env.prod.services]]
+binding = "MANAGE_WORKER"
+service = "rhapp-space-manage-prod"
+
+[observability]
+enabled = false
