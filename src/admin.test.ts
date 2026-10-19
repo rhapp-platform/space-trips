@@ -37,7 +37,7 @@ function fakeTrips(options: { fail?: { op: string; status: number; message: stri
       if (options.fail?.op === op) return { ok: false, status: options.fail.status, message: options.fail.message };
       const [a, b, c, d] = args as any[];
       switch (op) {
-        case "list": return ok([...trips.values()]);
+        case "list": case "schedule": return ok([...trips.values()]);
         case "get": {
           const t = trips.get(a);
           if (!t) return ok(null);
@@ -323,5 +323,53 @@ describe("Travelers", () => {
     expect(r.headers.get("Location")).toBe(`${BASE}?done=member-removed`);
     expect(f.members).toHaveLength(0);
     expect((await f.post(`${BASE}/members/su_dana/remove`, {})).status).toBe(404);
+  });
+});
+
+describe("Public pages and drafts", () => {
+  function withDraft() {
+    const f = fixture();
+    f.trips.set(TRIP, { ...f.trips.get(TRIP)!, status: "draft", visibility: "public" });
+    f.trips.set(OTHER, { ...f.trips.get(OTHER)!, visibility: "public" });
+    return f;
+  }
+
+  test("the list leaves drafts out for visitors, members and staff", async () => {
+    const f = withDraft();
+    const anon = await (await app.fetch(new Request(`${ORIGIN}/trips`), f.env)).text();
+    expect(anon).toContain("Other trip");
+    expect(anon).not.toContain("Spring");
+    for (const role of ["member", "staff"]) {
+      const html = await (await f.request("/trips", {}, { role })).text();
+      expect(html).toContain("Other trip");
+      expect(html).not.toContain("Spring");
+    }
+  });
+
+  test("a draft is not available to visitors or members, even when public", async () => {
+    const f = withDraft();
+    const anon = await app.fetch(new Request(`${ORIGIN}/trips/${TRIP}`), f.env);
+    expect(anon.status).toBe(404);
+    expect(await anon.text()).not.toContain("Spring");
+    const member = await f.request(`/trips/${TRIP}`, {}, { role: "member" });
+    expect(member.status).toBe(404);
+    expect(await member.text()).not.toContain("Spring");
+  });
+
+  test("staff can preview a draft, marked as a draft and never cached", async () => {
+    const f = withDraft();
+    const res = await f.request(`/trips/${TRIP}`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain("Spring &lt;tour&gt;");
+    expect(html).toContain("This trip is a draft");
+    expect(res.headers.get("Cache-Control")).toContain("no-store");
+  });
+
+  test("active trips show without the draft note", async () => {
+    const f = withDraft();
+    const html = await (await app.fetch(new Request(`${ORIGIN}/trips/${OTHER}`), f.env)).text();
+    expect(html).toContain("Other trip");
+    expect(html).not.toContain("This trip is a draft");
   });
 });

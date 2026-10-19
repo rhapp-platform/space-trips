@@ -9,7 +9,7 @@
 
 import { Hono } from "hono";
 import { escapeHtml as esc, readSpaceRecord, renderState, resolveSpaceName } from "../../space-surface/src";
-import { admin } from "./admin";
+import { admin, canManageTrips } from "./admin";
 import { callTrips } from "./trips";
 import { notAvailable, page, scope, unavailable, type Scope } from "./scope";
 import { SURFACE } from "./surface";
@@ -129,7 +129,11 @@ function renderTripDetail(
         .join("")}</div>`
     : "";
 
-  return `<div class="trip-head">
+  const draftNote = trip.status === "draft"
+    ? `<p class="draft-note" role="note">This trip is a draft. Only staff can see it. Set its status to Active in Manage trips to share it.</p>`
+    : "";
+
+  return `${draftNote}<div class="trip-head">
     <h1>${esc(trip.title)}</h1>
     <div class="trip-meta">
       ${dates ? `<div class="row"><span class="k">📅</span><span>${esc(dates)}</span></div>` : ""}
@@ -161,12 +165,16 @@ app.get("/trips", async (c) => {
   const result = await callTrips<TripRow[]>(c.env, s.gn, op, args);
   if (!result.ok) return unavailable(s, "/trips", result.status);
 
+  // The store does not filter by status, so drafts are dropped here. Staff
+  // find drafts in /trips/admin; this page shows what everyone else sees.
+  const trips = result.value.filter(t => t.status !== "draft");
+
   return page(s, {
     title: "Trips",
     canonicalPath: "/trips",
     cache: s.cache,
     description: `Upcoming trips at ${s.space.name}.`,
-    content: renderAgenda(result.value, s.space.name, s.viewer.signedIn),
+    content: renderAgenda(trips, s.space.name, s.viewer.signedIn),
   });
 });
 
@@ -187,6 +195,11 @@ app.get("/trips/:id", async (c) => {
 
   const { trip, members } = result.value;
 
+  // Drafts are for staff only: they preview one from the admin's
+  // "View as a visitor" link. Everyone else gets the same page as a missing trip.
+  const draft = trip.status === "draft";
+  if (draft && !canManageTrips(s.viewer.role)) return notAvailable(s, path);
+
   // Enforce visibility gate in the surface worker (space-store serves raw data).
   if (trip.visibility === "private") {
     if (!s.viewer.uid || !members.some((m: MemberRow) => m.member_id === s.viewer.uid)) {
@@ -201,8 +214,8 @@ app.get("/trips/:id", async (c) => {
     barTitle: "Trips",
     backPath: "/trips",
     canonicalPath: `/trips/${id}`,
-    // Private and members-only trips must never be edge-cached.
-    cache: trip.visibility === "public" ? s.cache : "private",
+    // Drafts, private and members-only trips must never be edge-cached.
+    cache: draft ? "no-store" : trip.visibility === "public" ? s.cache : "private",
     description: trip.description?.slice(0, 300) ?? undefined,
     content: renderTripDetail(result.value, s.viewer.uid),
   });

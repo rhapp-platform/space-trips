@@ -35,6 +35,9 @@ export const TRIPS_CSS = `
 .trip-card .status{display:inline-block;font-size:12px;font-weight:700;letter-spacing:.04em;
   text-transform:uppercase;padding:3px 9px;border-radius:999px;background:var(--soft);color:var(--brand)}
 
+.draft-note{margin:0 0 16px;padding:10px 14px;border:1px dashed var(--rule);border-radius:12px;
+  background:var(--soft);font-size:14px}
+
 .trip-head h1{font:700 clamp(25px,7.5vw,38px)/1.12 var(--heading);letter-spacing:-.03em;margin:0 0 12px}
 .trip-meta{display:grid;gap:8px;margin:0 0 20px;padding:0 0 18px;border-bottom:1px solid var(--rule)}
 .trip-meta .row{display:flex;gap:10px;font-size:15px;align-items:flex-start}
