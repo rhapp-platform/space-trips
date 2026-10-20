@@ -482,3 +482,42 @@ describe("Public trip page: private details", () => {
     }
   });
 });
+
+describe("Trip cover image", () => {
+  const cover = (v: unknown) => JSON.stringify(v);
+
+  test("a new trip can have a cover; without a choice nothing is sent", async () => {
+    const f = fixture();
+    expect(await (await f.request("/trips/admin/new")).text()).toContain("Cover image (optional)");
+    await f.post("/trips/admin/new", { ...TRIP_FORM, imageSelection: cover({ space: "renner", tag: "beach", revision: REV }) });
+    await f.post("/trips/admin/new", TRIP_FORM);
+    const [withCover, without] = f.writes().filter((c) => c.op === "create").map((c) => c.args[2] as Record<string, unknown>);
+    expect(withCover).toMatchObject({ cover_tag: "beach", cover_revision: REV });
+    expect("cover_tag" in without!).toBe(false);
+  });
+
+  test("edit sets and removes the cover, shows it, and refuses another space's image", async () => {
+    const f = fixture();
+    await f.post(`${BASE}/edit`, { ...TRIP_FORM, imageSelection: cover({ space: "renner", tag: "beach" }) });
+    expect(f.trips.get(TRIP)).toMatchObject({ cover_tag: "beach", cover_revision: null });
+    expect(await (await f.request(BASE)).text()).toContain("/g/renner/beach/md.webp");
+    expect(await (await f.request(`${BASE}/edit`)).text()).toContain("beach");
+    // A mistake elsewhere in the form shows the saved cover again.
+    expect(await (await f.post(`${BASE}/edit`, { ...TRIP_FORM, title: "" })).text()).toContain("beach");
+    const before = f.writes().length;
+    expect((await f.post(`${BASE}/edit`, { ...TRIP_FORM, imageSelection: cover({ space: "elsewhere", tag: "x" }) })).status).toBe(400);
+    expect(f.writes()).toHaveLength(before);
+    await f.post(`${BASE}/edit`, { ...TRIP_FORM, imageSelection: "null" });
+    expect(f.trips.get(TRIP)).toMatchObject({ cover_tag: null, cover_revision: null });
+  });
+
+  test("the cover shows on the public list and trip page", async () => {
+    const f = fixture();
+    f.trips.set(TRIP, { ...f.trips.get(TRIP)!, visibility: "public", cover_tag: "beach", cover_revision: null });
+    const list = await (await app.fetch(new Request(`${ORIGIN}/trips`), f.env)).text();
+    expect(list).toContain("/g/renner/beach/sm.webp");
+    const page = await (await app.fetch(new Request(`${ORIGIN}/trips/${TRIP}`), f.env)).text();
+    expect(page).toContain('class="trip-cover"');
+    expect(page).toContain("/g/renner/beach/md.webp");
+  });
+});

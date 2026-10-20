@@ -38,6 +38,9 @@ export const TRIPS_CSS = `
 .draft-note{margin:0 0 16px;padding:10px 14px;border:1px dashed var(--rule);border-radius:12px;
   background:var(--soft);font-size:14px}
 
+.trip-cover{display:block;width:100%;aspect-ratio:2/1;object-fit:cover;border-radius:18px;margin:0 0 18px}
+.trip-card-cover{display:block;width:calc(100% + 36px);margin:-18px -18px 14px;aspect-ratio:3/1;object-fit:cover;
+  border-radius:18px 18px 0 0}
 .trip-head h1{font:700 clamp(25px,7.5vw,38px)/1.12 var(--heading);letter-spacing:-.03em;margin:0 0 12px}
 .trip-meta{display:grid;gap:8px;margin:0 0 20px;padding:0 0 18px;border-bottom:1px solid var(--rule)}
 .trip-meta .row{display:flex;gap:10px;font-size:15px;align-items:flex-start}

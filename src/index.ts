@@ -81,7 +81,11 @@ function when(value: string | null): string {
   return value ? value.replace("T", " ") : "";
 }
 
-function renderAgenda(trips: TripRow[], spaceName: string, signedIn: boolean): string {
+function coverUrl(trip: TripRow, gn: string, environment: string, size: "sm" | "md"): string | null {
+  return trip.cover_tag ? artworkUrl(gn, trip.cover_tag, trip.cover_revision, size, environment) : null;
+}
+
+function renderAgenda(trips: TripRow[], spaceName: string, signedIn: boolean, gn: string, environment: string): string {
   if (!trips.length) {
     return renderState(
       "No trips yet",
@@ -93,7 +97,9 @@ function renderAgenda(trips: TripRow[], spaceName: string, signedIn: boolean): s
   const cards = trips
     .map(t => {
       const dates = dateRange(t);
+      const cover = coverUrl(t, gn, environment, "sm");
       return `<li><a class="trip-card" href="/trips/${esc(t.id)}">
+        ${cover ? `<img class="trip-card-cover" src="${esc(cover)}" alt="" loading="lazy">` : ""}
         <h2>${esc(t.title)}</h2>
         ${dates ? `<p class="dates">${esc(dates)}</p>` : ""}
         <span class="status">${esc(statusLabel(t.status))}</span>
@@ -155,7 +161,8 @@ function renderTripDetail(
     ? `<p class="draft-note" role="note">This trip is a draft. Only staff can see it. Set its status to Active in Manage trips to share it.</p>`
     : "";
 
-  return `${draftNote}<div class="trip-head">
+  const cover = coverUrl(trip, gn, environment, "md");
+  return `${draftNote}${cover ? `<img class="trip-cover" src="${esc(cover)}" alt="">` : ""}<div class="trip-head">
     <h1>${esc(trip.title)}</h1>
     <div class="trip-meta">
       ${dates ? `<div class="row"><span class="k">📅</span><span>${esc(dates)}</span></div>` : ""}
@@ -196,7 +203,7 @@ app.get("/trips", async (c) => {
     canonicalPath: "/trips",
     cache: s.cache,
     description: `Upcoming trips at ${s.space.name}.`,
-    content: renderAgenda(trips, s.space.name, s.viewer.signedIn),
+    content: renderAgenda(trips, s.space.name, s.viewer.signedIn, s.gn, s.environment),
   });
 });
 

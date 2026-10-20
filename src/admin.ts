@@ -113,6 +113,7 @@ const CSS = `
 .admin-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;align-items:center}
 .admin-row select{width:auto;flex:1 1 140px}
 .admin-kinds{display:grid;gap:10px;list-style:none;padding:0;margin:0 0 16px}
+.admin-cover{display:block;width:100%;aspect-ratio:3/1;object-fit:cover;border-radius:14px;margin:0 0 14px}
 .admin-thumb{float:right;margin:0 0 8px 12px;border-radius:10px;object-fit:cover}
 .visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{
@@ -267,7 +268,7 @@ function validDate(value: string): boolean {
   return !Number.isNaN(d.getTime()) && d.toISOString().startsWith(value);
 }
 
-function tripWrite(form: Form): { write?: Record<string, unknown>; error?: string } {
+function tripWrite(form: Form, gn: string): { write?: Record<string, unknown>; error?: string } {
   const title = form.title ?? "";
   if (!title) return { error: "Give the trip a name, like “Spring tour 2027”." };
   if (title.length > 200) return { error: "Keep the trip name to 200 characters or fewer." };
@@ -281,8 +282,11 @@ function tripWrite(form: Form): { write?: Record<string, unknown>; error?: strin
   if (start && end && end < start) return { error: "The trip ends before it starts. Check the two dates." };
   if (!STATUSES.some(([v]) => v === form.status)) return { error: "Choose a status from the list." };
   if (!VISIBILITIES.some(([v]) => v === form.visibility)) return { error: "Choose who can see this trip." };
+  const cover = imageWrite(form.imageSelection, gn, ["cover_tag", "cover_revision"]);
+  if (cover.error) return { error: cover.error };
   return {
     write: {
+      ...cover.write,
       title,
       description: description || null,
       status: form.status,
@@ -297,7 +301,11 @@ function tripWrite(form: Form): { write?: Record<string, unknown>; error?: strin
  * The picker's hidden field: empty = leave the image alone, `null` = remove
  * it, otherwise the chosen library image. Anything else is refused.
  */
-function imageWrite(raw: string | undefined, gn: string): { write?: Record<string, unknown>; error?: string } {
+function imageWrite(
+  raw: string | undefined,
+  gn: string,
+  [tagKey, revisionKey]: [string, string] = ["image_tag", "image_revision"],
+): { write?: Record<string, unknown>; error?: string } {
   if (!raw) return { write: {} };
   let choice: unknown;
   try {
@@ -305,11 +313,11 @@ function imageWrite(raw: string | undefined, gn: string): { write?: Record<strin
   } catch {
     return { error: "Choose the image again." };
   }
-  if (choice === null) return { write: { image_tag: null, image_revision: null } };
+  if (choice === null) return { write: { [tagKey]: null, [revisionKey]: null } };
   const { space, tag, revision } = (choice ?? {}) as Record<string, unknown>;
   if (space !== gn || typeof tag !== "string" || !IMAGE_TAG.test(tag)) return { error: "Choose an image from this space's library." };
   if (revision !== undefined && (typeof revision !== "string" || !IMAGE_REVISION.test(revision))) return { error: "Choose the image again." };
-  return { write: { image_tag: tag, image_revision: revision ?? null } };
+  return { write: { [tagKey]: tag, [revisionKey]: revision ?? null } };
 }
 
 function segmentWrite(form: Form, kind: Kind, gn: string): { write?: Record<string, unknown>; error?: string } {
@@ -361,10 +369,11 @@ function tripFormValues(trip?: TripRow): Form {
     end_date: trip?.end_date ?? "",
     status: trip?.status ?? "draft",
     visibility: trip?.visibility ?? "members",
+    imageSelection: "",
   };
 }
 
-function tripForm(action: string, values: Form, submit: string, cancel: string, error?: string): string {
+function tripForm(s: Scope, action: string, values: Form, trip: TripRow | undefined, submit: string, cancel: string, error?: string): string {
   return `${errorBox(error)}<form class="admin-form" method="post" action="${esc(action)}">
     ${field("title", "Trip name", input("title", values.title, 'required maxlength="200" autocomplete="off"'))}
     ${field("description", "Description", textarea("description", values.description, 4000), "Optional. Shown to everyone who can see the trip.")}
@@ -374,6 +383,7 @@ function tripForm(action: string, values: Form, submit: string, cancel: string, 
     </div>
     ${field("visibility", "Who can see it", select("visibility", VISIBILITIES, values.visibility))}
     ${field("status", "Status", select("status", STATUSES, values.status), "Archive a trip once it's over.")}
+    ${imageField("Cover image (optional)", `${ROOT}/image-library`, imageChoice(s, trip?.cover_tag, trip?.cover_revision), values.imageSelection ?? "")}
     <div class="admin-actions"><button class="primary" type="submit">${esc(submit)}</button><a href="${esc(cancel)}">Cancel</a></div>
   </form>`;
 }
@@ -393,12 +403,16 @@ function segmentFormValues(kind: Kind, seg?: SegmentRow): Form {
   };
 }
 
-function imageChoice(s: Scope, seg: SegmentRow | undefined) {
-  if (!seg?.image_tag) return null;
+function imageChoice(s: Scope, tag: string | null | undefined, revision: string | null | undefined) {
+  if (!tag) return null;
   return {
-    image: { space: s.gn, tag: seg.image_tag, ...(seg.image_revision ? { revision: seg.image_revision } : {}) },
-    url: artworkUrl(s.gn, seg.image_tag, seg.image_revision, "sm", s.environment),
+    image: { space: s.gn, tag, ...(revision ? { revision } : {}) },
+    url: artworkUrl(s.gn, tag, revision, "sm", s.environment),
   };
+}
+
+function imageUrl(s: Scope, tag: string, revision: string | null | undefined, size: "sm" | "md" = "sm"): string {
+  return artworkUrl(s.gn, tag, revision, size, s.environment);
 }
 
 function segmentForm(
@@ -426,7 +440,7 @@ function segmentForm(
     ${details}
     ${field("confirmation_ref", "Confirmation number", input("confirmation_ref", values.confirmation_ref, 'maxlength="100" autocomplete="off"'), "Only travelers on this trip and staff see this.")}
     ${field("notes", "Notes", textarea("notes", values.notes, 4000), "For staff. Not shown on the trip page.")}
-    ${imageField("Image (optional)", `${ROOT}/image-library`, imageChoice(s, seg), values.imageSelection ?? "")}
+    ${imageField("Image (optional)", `${ROOT}/image-library`, imageChoice(s, seg?.image_tag, seg?.image_revision), values.imageSelection ?? "")}
     <div class="admin-actions"><button class="primary" type="submit">${esc(submit)}</button><a href="${esc(cancel)}">Cancel</a></div>
   </form>`;
 }
@@ -528,6 +542,7 @@ admin.get("/", async (c) => {
         .map((t) => {
           const dates = dateRange(t);
           return `<li><a class="admin-card" href="${ROOT}/${esc(t.id)}">
+          ${t.cover_tag ? `<img class="admin-thumb" src="${esc(imageUrl(s, t.cover_tag, t.cover_revision))}" alt="" width="96" height="64">` : ""}
           <h2>${esc(t.title)}</h2>
           ${dates ? `<p>${esc(dates)}</p>` : ""}
           <span class="admin-status">${esc(statusLabel(t.status))}</span>
@@ -556,7 +571,7 @@ function newTripPage(s: Scope, values: Form, error?: string, status = 200): Resp
     "New trip",
     `<h1 class="admin-title">New trip</h1>
      <p class="admin-meta">You'll add the itinerary and travelers after it's created. You're added as its owner.</p>
-     ${tripForm(`${ROOT}/new`, values, "Create trip", ROOT, error)}`,
+     ${tripForm(s, `${ROOT}/new`, values, undefined, "Create trip", ROOT, error)}`,
     status,
   );
 }
@@ -566,7 +581,7 @@ admin.get("/new", (c) => newTripPage(c.get("adminScope"), tripFormValues()));
 admin.post("/new", async (c) => {
   const s = c.get("adminScope");
   const form = await readForm(c);
-  const { write, error } = tripWrite(form);
+  const { write, error } = tripWrite(form, s.gn);
   if (!write) return newTripPage(s, form, error, 400);
   if (!s.viewer.uid) return failure(s, `${ROOT}/new`, 503);
   const id = newId("trp_");
@@ -611,7 +626,7 @@ admin.get("/:id", async (c) => {
     ? segments
         .map(
           (seg) => `<div class="admin-segment">
-        ${seg.image_tag ? `<img class="admin-thumb" src="${esc(artworkUrl(s.gn, seg.image_tag, seg.image_revision, "sm", s.environment))}" alt="" width="96" height="64">` : ""}
+        ${seg.image_tag ? `<img class="admin-thumb" src="${esc(imageUrl(s, seg.image_tag, seg.image_revision))}" alt="" width="96" height="64">` : ""}
         <p class="type">${esc(kindOf(seg.type)?.name ?? seg.type)}</p>
         <strong>${esc(seg.label)}</strong>
         ${shownDetails(seg, true).map(([k, v]) => `<br><small>${esc(k)}: ${esc(v)}</small>`).join("")}
@@ -647,7 +662,8 @@ admin.get("/:id", async (c) => {
     s,
     path,
     trip.title,
-    `<h1 class="admin-title">${esc(trip.title)}</h1>${notice(c)}
+    `${trip.cover_tag ? `<img class="admin-cover" src="${esc(imageUrl(s, trip.cover_tag, trip.cover_revision, "md"))}" alt="">` : ""}
+     <h1 class="admin-title">${esc(trip.title)}</h1>${notice(c)}
      <p class="admin-meta">${[dateRange(trip), statusLabel(trip.status), label(VISIBILITIES, trip.visibility)]
        .filter(Boolean)
        .map(esc)
@@ -670,13 +686,13 @@ admin.get("/:id", async (c) => {
 
 // ── Edit / delete trip ──────────────────────────────────────────────────────
 
-function editTripPage(s: Scope, id: string, title: string, values: Form, error?: string, status = 200): Response {
-  const base = `${ROOT}/${id}`;
+function editTripPage(s: Scope, trip: TripRow, values: Form, error?: string, status = 200): Response {
+  const base = `${ROOT}/${trip.id}`;
   return adminPage(
     s,
     `${base}/edit`,
-    `Edit ${title}`,
-    `<h1 class="admin-title">Edit trip</h1>${tripForm(`${base}/edit`, values, "Save trip", base, error)}`,
+    `Edit ${trip.title}`,
+    `<h1 class="admin-title">Edit trip</h1>${tripForm(s, `${base}/edit`, values, trip, "Save trip", base, error)}`,
     status,
     base,
   );
@@ -689,7 +705,7 @@ admin.get("/:id/edit", async (c) => {
   const result = await loadTrip(c, s, id);
   if (!result.ok) return failure(s, `${ROOT}/${id}/edit`, result.status);
   if (!result.value) return failure(s, `${ROOT}/${id}/edit`, 404);
-  return editTripPage(s, id, result.value.trip.title, tripFormValues(result.value.trip));
+  return editTripPage(s, result.value.trip, tripFormValues(result.value.trip));
 });
 
 admin.post("/:id/edit", async (c) => {
@@ -697,13 +713,18 @@ admin.post("/:id/edit", async (c) => {
   const id = c.req.param("id");
   const path = `${ROOT}/${id}/edit`;
   if (!TRP.test(id)) return failure(s, ROOT, 404);
+  // Loaded first: the form shows the current cover again if it needs fixing.
+  const current = await loadTrip(c, s, id);
+  if (!current.ok) return failure(s, path, current.status);
+  if (!current.value) return failure(s, path, 404);
+  const trip = current.value.trip;
   const form = await readForm(c);
-  const { write, error } = tripWrite(form);
-  if (!write) return editTripPage(s, id, form.title || "trip", form, error, 400);
+  const { write, error } = tripWrite(form, s.gn);
+  if (!write) return editTripPage(s, trip, form, error, 400);
   const result = await callTrips<TripRow>(c.env, s.gn, "update", [id, write, s.viewer.uid]);
   if (!result.ok) {
     return fixable(result.status)
-      ? editTripPage(s, id, form.title || "trip", form, result.message, 400)
+      ? editTripPage(s, trip, form, result.message, 400)
       : failure(s, path, result.status);
   }
   return c.redirect(`${ROOT}/${id}?done=saved`, 303);

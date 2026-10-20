@@ -36,6 +36,9 @@ export interface TripRow {
   visibility: "private" | "members" | "public";
   created_by: string;
   created_at: string;
+  /** Store v35: the trip's cover image. Absent below v35. */
+  cover_tag?: string | null;
+  cover_revision?: string | null;
 }
 
 export interface SegmentRow {
