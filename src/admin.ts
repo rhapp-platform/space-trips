@@ -7,6 +7,9 @@ import {
 } from "../../space-surface/src";
 import type { ManagementArea } from "../../space-surface/src/management";
 import { roleLevel } from "../../sets/sets/auth/shared/role-hierarchy";
+import { IMAGE_PICKER_JS } from "../../home/src/generated/image-picker";
+import { artworkUrl, imageField, imageLibraryRequest, IMAGE_FIELD_JS } from "../../home/src/image-field";
+import { DETAIL_MAX, KINDS, kindOf, readDetails, shownDetails, type Kind } from "./kinds";
 import { people, type People, type Person } from "./people";
 import { callTrips } from "./trips";
 import { scope, type Scope } from "./scope";
@@ -17,9 +20,17 @@ export function canManageTrips(role: string | null): boolean {
   return role !== null && role !== "owner" && roleLevel(role) >= roleLevel("staff");
 }
 
+const ROOT = "/trips/admin";
+
+/** The shared image field's script; the name carries a hash of its content (checked by a test). */
+export const IMAGE_FIELD_PATH = `${ROOT}/image-field-aa3fffa95380.js`;
+
 const ADMIN_SURFACE = defineSurface({
   ...SURFACE,
-  clientScriptPath: undefined,
+  // Only the image field: it finds its fieldset and does nothing on other pages.
+  clientScript: true,
+  clientScriptType: "module",
+  clientScriptPath: IMAGE_FIELD_PATH,
   profiles: [],
   backLink: false,
   indexable: false,
@@ -31,7 +42,6 @@ const ADMIN_SURFACE = defineSurface({
 // get the Trips crumb and hub entry.
 const MANAGEMENT = "trips" as ManagementArea;
 
-const ROOT = "/trips/admin";
 const TRP = /^trp_[0-9A-Za-z]{26}$/;
 const TSEG = /^tseg_[0-9A-Za-z]{26}$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -47,13 +57,8 @@ const VISIBILITIES: [TripRow["visibility"], string][] = [
   ["private", "Only people on this trip"],
   ["public", "Anyone, including visitors"],
 ];
-const SEGMENT_TYPES: [SegmentRow["type"], string][] = [
-  ["flight", "Flight"],
-  ["hotel", "Hotel"],
-  ["car", "Car"],
-  ["activity", "Activity"],
-  ["other", "Other"],
-];
+const IMAGE_TAG = /^[a-z][a-z0-9-]{0,79}$/;
+const IMAGE_REVISION = /^[a-f0-9]{64}$/;
 const MEMBER_ROLES: [MemberRow["role"], string][] = [
   ["traveler", "Traveler"],
   ["owner", "Owner"],
@@ -107,6 +112,8 @@ const CSS = `
 .admin-person small{color:var(--muted)}
 .admin-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;align-items:center}
 .admin-row select{width:auto;flex:1 1 140px}
+.admin-kinds{display:grid;gap:10px;list-style:none;padding:0;margin:0 0 16px}
+.admin-thumb{float:right;margin:0 0 8px 12px;border-radius:10px;object-fit:cover}
 .visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{
   outline:3px solid var(--brand);outline-offset:3px}
@@ -286,34 +293,60 @@ function tripWrite(form: Form): { write?: Record<string, unknown>; error?: strin
   };
 }
 
-function segmentWrite(form: Form): { write?: Record<string, unknown>; error?: string } {
-  if (!SEGMENT_TYPES.some(([v]) => v === form.type)) return { error: "Choose what kind of item this is." };
+/**
+ * The picker's hidden field: empty = leave the image alone, `null` = remove
+ * it, otherwise the chosen library image. Anything else is refused.
+ */
+function imageWrite(raw: string | undefined, gn: string): { write?: Record<string, unknown>; error?: string } {
+  if (!raw) return { write: {} };
+  let choice: unknown;
+  try {
+    choice = JSON.parse(raw);
+  } catch {
+    return { error: "Choose the image again." };
+  }
+  if (choice === null) return { write: { image_tag: null, image_revision: null } };
+  const { space, tag, revision } = (choice ?? {}) as Record<string, unknown>;
+  if (space !== gn || typeof tag !== "string" || !IMAGE_TAG.test(tag)) return { error: "Choose an image from this space's library." };
+  if (revision !== undefined && (typeof revision !== "string" || !IMAGE_REVISION.test(revision))) return { error: "Choose the image again." };
+  return { write: { image_tag: tag, image_revision: revision ?? null } };
+}
+
+function segmentWrite(form: Form, kind: Kind, gn: string): { write?: Record<string, unknown>; error?: string } {
   const itemLabel = form.label ?? "";
-  if (!itemLabel) return { error: "Give this item a short name, like “Flight to Denver”." };
+  if (!itemLabel) return { error: `Give this item a short name, like “${kind.example}”.` };
   if (itemLabel.length > 200) return { error: "Keep the name to 200 characters or fewer." };
   const start = form.start_at ?? "";
   const end = form.end_at ?? "";
-  for (const [value, which] of [[start, "start"], [end, "end"]] as const) {
-    if (value && !DATETIME.test(value)) return { error: `The ${which} time isn't complete. Pick a date and a time.` };
+  for (const [value, which] of [[start, kind.start], [end, kind.end]] as const) {
+    if (value && !DATETIME.test(value)) return { error: `“${which}” isn't complete. Pick a date and a time.` };
   }
-  if (start && end && end < start) return { error: "This item ends before it starts. Check the two times." };
+  if (start && end && end < start) return { error: `“${kind.end}” is before “${kind.start}”. Check the two times.` };
   const limits: [string, string, number][] = [
-    ["location", "Location", 300],
     ["confirmation_ref", "Confirmation number", 100],
     ["notes", "Notes", 4000],
+    ...(kind.location ? [["location", kind.location, 300] as [string, string, number]] : []),
+    ...kind.details.map((f) => [`d_${f.key}`, f.label, DETAIL_MAX] as [string, string, number]),
   ];
   for (const [key, name, max] of limits) {
-    if ((form[key] ?? "").length > max) return { error: `Keep ${name.toLowerCase()} to ${max.toLocaleString("en-US")} characters or fewer.` };
+    if ((form[key] ?? "").length > max) return { error: `Keep “${name}” to ${max.toLocaleString("en-US")} characters or fewer.` };
   }
+  const image = imageWrite(form.imageSelection, gn);
+  if (image.error) return { error: image.error };
+  const details = Object.fromEntries(kind.details.map((f) => [f.key, form[`d_${f.key}`] ?? ""]).filter(([, v]) => v));
   return {
     write: {
-      type: form.type,
+      type: kind.type,
       label: itemLabel,
       start_at: start || null,
       end_at: end || null,
-      location: form.location || null,
+      // A kind without a location leaves any saved one alone.
+      ...(kind.location ? { location: form.location || null } : {}),
       confirmation_ref: form.confirmation_ref || null,
       notes: form.notes || null,
+      // null clears; it is also the only value a store below v34 accepts.
+      details: Object.keys(details).length ? details : null,
+      ...image.write,
     },
   };
 }
@@ -345,29 +378,55 @@ function tripForm(action: string, values: Form, submit: string, cancel: string, 
   </form>`;
 }
 
-function segmentFormValues(seg?: SegmentRow): Form {
+function segmentFormValues(kind: Kind, seg?: SegmentRow): Form {
+  const details = readDetails(seg?.details);
   return {
-    type: seg?.type ?? "flight",
+    type: kind.type,
     label: seg?.label ?? "",
     start_at: seg?.start_at ?? "",
     end_at: seg?.end_at ?? "",
     location: seg?.location ?? "",
     confirmation_ref: seg?.confirmation_ref ?? "",
     notes: seg?.notes ?? "",
+    imageSelection: "",
+    ...Object.fromEntries(kind.details.map((f) => [`d_${f.key}`, details[f.key] ?? ""])),
   };
 }
 
-function segmentForm(action: string, values: Form, submit: string, cancel: string, error?: string): string {
+function imageChoice(s: Scope, seg: SegmentRow | undefined) {
+  if (!seg?.image_tag) return null;
+  return {
+    image: { space: s.gn, tag: seg.image_tag, ...(seg.image_revision ? { revision: seg.image_revision } : {}) },
+    url: artworkUrl(s.gn, seg.image_tag, seg.image_revision, "sm", s.environment),
+  };
+}
+
+function segmentForm(
+  s: Scope,
+  action: string,
+  kind: Kind,
+  values: Form,
+  seg: SegmentRow | undefined,
+  submit: string,
+  cancel: string,
+  error?: string,
+): string {
+  const details = kind.details
+    .map((f) => field(`d_${f.key}`, f.label, input(`d_${f.key}`, values[`d_${f.key}`] ?? "", `maxlength="${DETAIL_MAX}" autocomplete="off"`),
+      [f.hint, f.private ? "Only travelers on this trip and staff see this." : ""].filter(Boolean).join(" ")))
+    .join("");
   return `${errorBox(error)}<form class="admin-form" method="post" action="${esc(action)}">
-    ${field("type", "Kind", select("type", SEGMENT_TYPES, values.type))}
-    ${field("label", "Name", input("label", values.label, 'required maxlength="200" autocomplete="off"'), "For example “Flight to Denver” or “Hotel Monaco”.")}
+    <input type="hidden" name="type" value="${esc(kind.type)}">
+    ${field("label", "Name", input("label", values.label, 'required maxlength="200" autocomplete="off"'), `For example “${kind.example}”.`)}
     <div class="admin-pair">
-      ${field("start_at", "Starts", input("start_at", values.start_at, 'type="datetime-local"'))}
-      ${field("end_at", "Ends", input("end_at", values.end_at, 'type="datetime-local"'))}
+      ${field("start_at", kind.start, input("start_at", values.start_at, 'type="datetime-local"'))}
+      ${field("end_at", kind.end, input("end_at", values.end_at, 'type="datetime-local"'))}
     </div>
-    ${field("location", "Location", input("location", values.location, 'maxlength="300"'))}
-    ${field("confirmation_ref", "Confirmation number", input("confirmation_ref", values.confirmation_ref, 'maxlength="100" autocomplete="off"'))}
-    ${field("notes", "Notes", textarea("notes", values.notes, 4000))}
+    ${kind.location ? field("location", kind.location, input("location", values.location, 'maxlength="300"')) : ""}
+    ${details}
+    ${field("confirmation_ref", "Confirmation number", input("confirmation_ref", values.confirmation_ref, 'maxlength="100" autocomplete="off"'), "Only travelers on this trip and staff see this.")}
+    ${field("notes", "Notes", textarea("notes", values.notes, 4000), "For staff. Not shown on the trip page.")}
+    ${imageField("Image (optional)", `${ROOT}/image-library`, imageChoice(s, seg), values.imageSelection ?? "")}
     <div class="admin-actions"><button class="primary" type="submit">${esc(submit)}</button><a href="${esc(cancel)}">Cancel</a></div>
   </form>`;
 }
@@ -446,6 +505,16 @@ admin.use("*", async (c, next) => {
   }
   await next();
 });
+
+// ── Image field ─────────────────────────────────────────────────────────────
+// Same wiring as space-events: the shared field from home, the library behind
+// set 284. Registered before "/:id" so these names never read as trip IDs.
+
+const SCRIPT_HEADERS = { "Content-Type": "text/javascript; charset=utf-8", "X-Content-Type-Options": "nosniff" };
+admin.get(IMAGE_FIELD_PATH.slice(ROOT.length), (c) => c.body(IMAGE_FIELD_JS, 200, SCRIPT_HEADERS));
+admin.get("/image-picker.js", (c) => c.body(IMAGE_PICKER_JS, 200, SCRIPT_HEADERS));
+admin.get("/image-library", (c) => imageLibraryRequest(c.env, c.get("adminScope"), c.req.raw));
+admin.post("/image-library/pin", (c) => imageLibraryRequest(c.env, c.get("adminScope"), c.req.raw));
 
 // ── Trip list ───────────────────────────────────────────────────────────────
 
@@ -542,8 +611,10 @@ admin.get("/:id", async (c) => {
     ? segments
         .map(
           (seg) => `<div class="admin-segment">
-        <p class="type">${esc(label(SEGMENT_TYPES, seg.type))}</p>
+        ${seg.image_tag ? `<img class="admin-thumb" src="${esc(artworkUrl(s.gn, seg.image_tag, seg.image_revision, "sm", s.environment))}" alt="" width="96" height="64">` : ""}
+        <p class="type">${esc(kindOf(seg.type)?.name ?? seg.type)}</p>
         <strong>${esc(seg.label)}</strong>
+        ${shownDetails(seg, true).map(([k, v]) => `<br><small>${esc(k)}: ${esc(v)}</small>`).join("")}
         ${seg.start_at || seg.end_at ? `<br><small>${esc(when(seg.start_at))}${seg.end_at ? ` → ${esc(when(seg.end_at))}` : ""}</small>` : ""}
         ${seg.location ? `<br><small>📍 ${esc(seg.location)}</small>` : ""}
         ${seg.confirmation_ref ? `<br><small>Confirmation: ${esc(seg.confirmation_ref)}</small>` : ""}
@@ -678,7 +749,9 @@ function segmentPage(
   trip: TripRow,
   path: string,
   heading: string,
+  kind: Kind,
   values: Form,
+  seg: SegmentRow | undefined,
   submit: string,
   error?: string,
   status = 200,
@@ -688,8 +761,8 @@ function segmentPage(
     s,
     path,
     heading,
-    `<p class="admin-meta">${esc(trip.title)}</p><h1 class="admin-title">${esc(heading)}</h1>
-     ${segmentForm(path, values, submit, base, error)}`,
+    `<p class="admin-meta">${esc(trip.title)} · ${esc(kind.name)}</p><h1 class="admin-title">${esc(heading)}</h1>
+     ${segmentForm(s, path, kind, values, seg, submit, base, error)}`,
     status,
     base,
   );
@@ -708,12 +781,31 @@ async function tripAndSegment(c: AdminContext, s: Scope, path: string, withSegme
   return { detail: result.value, segment };
 }
 
+/** A kind offered for new items; cars stay editable but aren't offered. */
+function newKind(type: string | undefined): Kind | undefined {
+  return KINDS.find((k) => k.type === type);
+}
+
 admin.get("/:id/segments/new", async (c) => {
   const s = c.get("adminScope");
   const path = new URL(c.req.url).pathname;
   const { response, detail } = await tripAndSegment(c, s, path, false);
   if (response) return response;
-  return segmentPage(s, detail!.trip, path, "Add to itinerary", segmentFormValues(), "Add to itinerary");
+  const trip = detail!.trip;
+  const kind = newKind(c.req.query("type"));
+  if (kind) return segmentPage(s, trip, path, `Add a ${kind.name.toLowerCase()}`, kind, segmentFormValues(kind), undefined, "Add to itinerary");
+  // First choose the kind: each asks for different details.
+  return adminPage(
+    s,
+    path,
+    "Add to itinerary",
+    `<p class="admin-meta">${esc(trip.title)}</p><h1 class="admin-title">What are you adding?</h1>
+     <ul class="admin-kinds">${KINDS.map((k) => `<li><a class="admin-card" href="${esc(path)}?type=${k.type}"><h2>${esc(k.name)}</h2>
+       <p>${esc([k.start, k.end, ...(k.location ? [k.location] : []), ...k.details.map((f) => f.label)].join(" · "))}</p></a></li>`).join("")}</ul>
+     <div class="admin-actions"><a href="${ROOT}/${esc(trip.id)}">Cancel</a></div>`,
+    200,
+    `${ROOT}/${trip.id}`,
+  );
 });
 
 admin.post("/:id/segments/new", async (c) => {
@@ -723,12 +815,15 @@ admin.post("/:id/segments/new", async (c) => {
   if (response) return response;
   const trip = detail!.trip;
   const form = await readForm(c);
-  const { write, error } = segmentWrite(form);
-  if (!write) return segmentPage(s, trip, path, "Add to itinerary", form, "Add to itinerary", error, 400);
+  const kind = newKind(form.type);
+  if (!kind) return c.redirect(path, 303);
+  const heading = `Add a ${kind.name.toLowerCase()}`;
+  const { write, error } = segmentWrite(form, kind, s.gn);
+  if (!write) return segmentPage(s, trip, path, heading, kind, form, undefined, "Add to itinerary", error, 400);
   const result = await callTrips<SegmentRow>(c.env, s.gn, "addSegment", [newId("tseg_"), trip.id, write]);
   if (!result.ok) {
     return fixable(result.status)
-      ? segmentPage(s, trip, path, "Add to itinerary", form, "Add to itinerary", result.message, 400)
+      ? segmentPage(s, trip, path, heading, kind, form, undefined, "Add to itinerary", result.message, 400)
       : failure(s, path, result.status);
   }
   return c.redirect(`${ROOT}/${trip.id}?done=segment-added`, 303);
@@ -739,7 +834,8 @@ admin.get("/:id/segments/:sid/edit", async (c) => {
   const path = new URL(c.req.url).pathname;
   const { response, detail, segment } = await tripAndSegment(c, s, path, true);
   if (response) return response;
-  return segmentPage(s, detail!.trip, path, "Edit itinerary item", segmentFormValues(segment), "Save item");
+  const kind = kindOf(segment!.type) ?? KINDS[KINDS.length - 1]!;
+  return segmentPage(s, detail!.trip, path, "Edit itinerary item", kind, segmentFormValues(kind, segment), segment, "Save item");
 });
 
 admin.post("/:id/segments/:sid/edit", async (c) => {
@@ -749,12 +845,14 @@ admin.post("/:id/segments/:sid/edit", async (c) => {
   if (response) return response;
   const trip = detail!.trip;
   const form = await readForm(c);
-  const { write, error } = segmentWrite(form);
-  if (!write) return segmentPage(s, trip, path, "Edit itinerary item", form, "Save item", error, 400);
+  // The kind is fixed once an item exists; the form can't change it.
+  const kind = kindOf(segment!.type) ?? KINDS[KINDS.length - 1]!;
+  const { write, error } = segmentWrite(form, kind, s.gn);
+  if (!write) return segmentPage(s, trip, path, "Edit itinerary item", kind, form, segment, "Save item", error, 400);
   const result = await callTrips<SegmentRow>(c.env, s.gn, "updateSegment", [segment!.id, write]);
   if (!result.ok) {
     return fixable(result.status)
-      ? segmentPage(s, trip, path, "Edit itinerary item", form, "Save item", result.message, 400)
+      ? segmentPage(s, trip, path, "Edit itinerary item", kind, form, segment, "Save item", result.message, 400)
       : failure(s, path, result.status);
   }
   return c.redirect(`${ROOT}/${trip.id}?done=segment-saved`, 303);

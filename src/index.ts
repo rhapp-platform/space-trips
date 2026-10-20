@@ -9,7 +9,9 @@
 
 import { Hono } from "hono";
 import { escapeHtml as esc, readSpaceRecord, renderState, resolveSpaceName } from "../../space-surface/src";
+import { artworkUrl } from "../../home/src/image-field";
 import { admin, canManageTrips } from "./admin";
+import { kindOf, shownDetails } from "./kinds";
 import { callTrips } from "./trips";
 import { notAvailable, page, scope, unavailable, type Scope } from "./scope";
 import { SURFACE } from "./surface";
@@ -75,6 +77,10 @@ const SEGMENT_GLYPH: Record<string, string> = {
   flight: "✈", hotel: "🏨", car: "🚗", activity: "🎯", other: "📌",
 };
 
+function when(value: string | null): string {
+  return value ? value.replace("T", " ") : "";
+}
+
 function renderAgenda(trips: TripRow[], spaceName: string, signedIn: boolean): string {
   if (!trips.length) {
     return renderState(
@@ -98,9 +104,16 @@ function renderAgenda(trips: TripRow[], spaceName: string, signedIn: boolean): s
     <ul class="trip-list">${cards}</ul>`;
 }
 
+/**
+ * `insider` = on this trip, or staff. Only insiders see confirmation numbers
+ * and private details (seat, room): a public trip page is readable by anyone,
+ * and a booking reference plus a name is enough to change a booking.
+ */
 function renderTripDetail(
   detail: TripDetail,
-  viewerUid: string | null,
+  gn: string,
+  environment: string,
+  insider: boolean,
 ): string {
   const { trip, segments, members } = detail;
   const dates = dateRange(trip);
@@ -108,15 +121,24 @@ function renderTripDetail(
   const segList = segments.length
     ? `<ul class="segments">${segments
         .map(
-          seg => `<li class="segment">
-        <p class="type">${SEGMENT_GLYPH[seg.type] ?? "•"} ${esc(seg.type)}</p>
-        <h3>${esc(seg.label)}</h3>
-        ${seg.start_at || seg.end_at
-          ? `<p class="when">${[seg.start_at, seg.end_at].filter((v): v is string => Boolean(v)).map(esc).join(" → ")}</p>`
+          seg => {
+            const kind = kindOf(seg.type);
+            const times = [
+              seg.start_at ? `${kind?.start ?? "Starts"} ${when(seg.start_at)}` : "",
+              seg.end_at ? `${kind?.end ?? "Ends"} ${when(seg.end_at)}` : "",
+            ].filter(Boolean);
+            return `<li class="segment">
+        ${seg.image_tag
+          ? `<img class="segment-image" src="${esc(artworkUrl(gn, seg.image_tag, seg.image_revision, "md", environment))}" alt="" loading="lazy">`
           : ""}
+        <p class="type">${SEGMENT_GLYPH[seg.type] ?? "•"} ${esc(kind?.name ?? seg.type)}</p>
+        <h3>${esc(seg.label)}</h3>
+        ${times.length ? `<p class="when">${times.map(esc).join(" · ")}</p>` : ""}
         ${seg.location ? `<p class="when">📍 ${esc(seg.location)}</p>` : ""}
-        ${seg.confirmation_ref ? `<p class="when">Ref: ${esc(seg.confirmation_ref)}</p>` : ""}
-      </li>`,
+        ${shownDetails(seg, insider).map(([k, v]) => `<p class="when">${esc(k)}: ${esc(v)}</p>`).join("")}
+        ${insider && seg.confirmation_ref ? `<p class="when">Confirmation: ${esc(seg.confirmation_ref)}</p>` : ""}
+      </li>`;
+          },
         )
         .join("")}</ul>`
     : "<p>No itinerary segments yet.</p>";
@@ -197,8 +219,10 @@ app.get("/trips/:id", async (c) => {
 
   // Drafts are for staff only: they preview one from the admin's
   // "View as a visitor" link. Everyone else gets the same page as a missing trip.
+  const staff = canManageTrips(s.viewer.role);
   const draft = trip.status === "draft";
-  if (draft && !canManageTrips(s.viewer.role)) return notAvailable(s, path);
+  if (draft && !staff) return notAvailable(s, path);
+  const onTrip = Boolean(s.viewer.uid && members.some((m: MemberRow) => m.member_id === s.viewer.uid));
 
   // Enforce visibility gate in the surface worker (space-store serves raw data).
   if (trip.visibility === "private") {
@@ -217,7 +241,7 @@ app.get("/trips/:id", async (c) => {
     // Drafts, private and members-only trips must never be edge-cached.
     cache: draft ? "no-store" : trip.visibility === "public" ? s.cache : "private",
     description: trip.description?.slice(0, 300) ?? undefined,
-    content: renderTripDetail(result.value, s.viewer.uid),
+    content: renderTripDetail(result.value, s.gn, s.environment, staff || onTrip),
   });
 });
 

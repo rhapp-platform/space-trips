@@ -54,6 +54,11 @@ binding = "MEMBER_ACCOUNTS"
 service = "space-store-stage"
 entrypoint = "SpaceStoreMemberAccounts"
 
+# The image library behind the itinerary item picker (set 284, as in space-events).
+[[env.stage.services]]
+binding = "IMAGES_WORKER"
+service = "rhs-284-stage"
+
 [[env.stage.services]]
 binding = "MANAGE_WORKER"
 service = "rhapp-space-manage-stage"
@@ -86,6 +91,11 @@ entrypoint = "SpaceStoreTrips"
 binding = "MEMBER_ACCOUNTS"
 service = "space-store-prod"
 entrypoint = "SpaceStoreMemberAccounts"
+
+# The image library behind the itinerary item picker (set 284, as in space-events).
+[[env.prod.services]]
+binding = "IMAGES_WORKER"
+service = "rhs-284-prod"
 
 [[env.prod.services]]
 binding = "MANAGE_WORKER"

@@ -21,6 +21,8 @@ export interface Env extends SurfaceEnv {
   MANAGE_WORKER?: Fetcher;
   /** Optional: enables member search and names in the admin. */
   MEMBER_ACCOUNTS?: MemberAccounts;
+  /** Set 284 (space images): the image library behind the item image picker. */
+  IMAGES_WORKER?: Fetcher;
 }
 
 export interface TripRow {
@@ -48,6 +50,10 @@ export interface SegmentRow {
   notes: string | null;
   position: number;
   created_at: string;
+  /** Store v34: JSON object of text fields; see kinds.ts. Absent below v34. */
+  details?: string | null;
+  image_tag?: string | null;
+  image_revision?: string | null;
 }
 
 export interface MemberRow {

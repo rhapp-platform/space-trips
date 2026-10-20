@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { sign } from "hono/jwt";
 import { app } from "./index";
+import { IMAGE_FIELD_PATH } from "./admin";
+import { IMAGE_FIELD_JS } from "../../home/src/image-field";
 import type { Env, MemberRow, SegmentRow, TripRow } from "./types";
 
 const SECRET = "trips-admin-test";
@@ -260,8 +262,14 @@ describe("Itinerary", () => {
   test("item validation", async () => {
     const f = fixture();
     expect(await (await f.post(`${BASE}/segments/new`, { ...SEG_FORM, label: "" })).text()).toContain("short name");
-    expect(await (await f.post(`${BASE}/segments/new`, { ...SEG_FORM, end_at: "2026-10-01T00:00" })).text()).toContain("ends before it starts");
-    expect((await f.post(`${BASE}/segments/new`, { ...SEG_FORM, type: "boat" })).status).toBe(400);
+    expect(await (await f.post(`${BASE}/segments/new`, { ...SEG_FORM, end_at: "2026-10-01T00:00" })).text()).toContain("“Check-out” is before “Check-in”");
+    // An unknown kind, or a car (no longer offered), goes back to choosing one.
+    for (const type of ["boat", "car"]) {
+      const r = await f.post(`${BASE}/segments/new`, { ...SEG_FORM, type });
+      expect([r.status, r.headers.get("Location")]).toEqual([303, `${BASE}/segments/new`]);
+    }
+    const tooLong = await f.post(`${BASE}/segments/new`, { ...SEG_FORM, d_phone: "5".repeat(301) });
+    expect(await tooLong.text()).toContain("Keep “Phone” to 300 characters");
     expect(f.writes()).toHaveLength(0);
   });
 });
@@ -371,5 +379,106 @@ describe("Public pages and drafts", () => {
     const html = await (await app.fetch(new Request(`${ORIGIN}/trips/${OTHER}`), f.env)).text();
     expect(html).toContain("Other trip");
     expect(html).not.toContain("This trip is a draft");
+  });
+});
+
+const REV = "b".repeat(64);
+const FLIGHT_FORM = { type: "flight", label: "Flight to Denver", start_at: "", end_at: "", confirmation_ref: "", notes: "" };
+
+describe("Item kinds, details and images", () => {
+  test("adding starts by choosing a kind; each kind asks for its own fields", async () => {
+    const f = fixture();
+    const choose = await (await f.request(`${BASE}/segments/new`)).text();
+    for (const name of ["Flight", "Hotel", "Activity", "Other"]) expect(choose).toContain(`?type=${name.toLowerCase()}`);
+    expect(choose).not.toContain("?type=car");
+    const flight = await (await f.request(`${BASE}/segments/new?type=flight`)).text();
+    expect(flight).toContain('name="d_airline"');
+    expect(flight).toContain(">Departs<");
+    expect(flight).not.toContain('name="location"');
+    const hotel = await (await f.request(`${BASE}/segments/new?type=hotel`)).text();
+    expect(hotel).toContain(">Check-in<");
+    expect(hotel).toContain(">Address<");
+    expect(hotel).toContain('name="d_room"');
+    expect(hotel).toContain("data-image-field");
+  });
+
+  test("details are sent as one object holding only the kind's filled-in fields", async () => {
+    const f = fixture();
+    await f.post(`${BASE}/segments/new`, { ...FLIGHT_FORM, d_airline: "United", d_seat: "14C", d_to: "", d_room: "ignored", location: "ignored" });
+    const write = f.writes().find((c) => c.op === "addSegment")!.args[2] as Record<string, unknown>;
+    expect(write.details).toEqual({ airline: "United", seat: "14C" });
+    expect("location" in write).toBe(false); // flights don't use it, so a saved one is kept
+    expect("image_tag" in write).toBe(false); // no image choice = image unchanged
+    await f.post(`${BASE}/segments/new`, FLIGHT_FORM);
+    expect((f.writes().filter((c) => c.op === "addSegment")[1]!.args[2] as Record<string, unknown>).details).toBeNull();
+  });
+
+  test("an item's kind can't change when it is edited", async () => {
+    const f = fixture();
+    await f.post(`${BASE}/segments/${SEG}/edit`, { ...SEG_FORM, type: "hotel", label: "Still a flight" });
+    expect((f.writes().find((c) => c.op === "updateSegment")!.args[1] as Record<string, unknown>).type).toBe("flight");
+  });
+
+  test("the image choice: set, remove, and refused from another space", async () => {
+    const f = fixture();
+    const choice = (v: unknown) => ({ ...SEG_FORM, imageSelection: JSON.stringify(v) });
+    await f.post(`${BASE}/segments/${SEG}/edit`, choice({ space: "renner", tag: "hotel-lobby", revision: REV, alt: "" }));
+    expect(f.segments.get(SEG)).toMatchObject({ image_tag: "hotel-lobby", image_revision: REV });
+    const edit = await (await f.request(`${BASE}/segments/${SEG}/edit`)).text();
+    expect(edit).toContain("hotel-lobby");
+    await f.post(`${BASE}/segments/${SEG}/edit`, choice(null));
+    expect(f.segments.get(SEG)).toMatchObject({ image_tag: null, image_revision: null });
+    const before = f.writes().length;
+    for (const bad of [{ space: "other-space", tag: "x" }, { space: "renner", tag: "Bad Tag" }, { space: "renner", tag: "ok", revision: "nope" }]) {
+      const r = await f.post(`${BASE}/segments/${SEG}/edit`, choice(bad));
+      expect(r.status).toBe(400);
+    }
+    expect((await f.post(`${BASE}/segments/${SEG}/edit`, { ...SEG_FORM, imageSelection: "{oops" })).status).toBe(400);
+    expect(f.writes()).toHaveLength(before);
+  });
+
+  test("the picker's script is served under a name that matches its content", async () => {
+    const f = fixture();
+    const hash = new Bun.CryptoHasher("sha256").update(IMAGE_FIELD_JS).digest("hex").slice(0, 12);
+    expect(IMAGE_FIELD_PATH).toBe(`/trips/admin/image-field-${hash}.js`);
+    const js = await f.request(IMAGE_FIELD_PATH);
+    expect(js.headers.get("Content-Type")).toContain("javascript");
+    expect(await js.text()).toBe(IMAGE_FIELD_JS);
+    expect(await (await f.request(BASE)).text()).toContain(`src="${IMAGE_FIELD_PATH}"`);
+    // The library is staff-only, like the rest of the admin.
+    expect((await f.request("/trips/admin/image-library", {}, { role: "member" })).status).toBe(403);
+  });
+});
+
+describe("Public trip page: private details", () => {
+  function publicTrip() {
+    const f = fixture();
+    f.trips.set(TRIP, { ...f.trips.get(TRIP)!, visibility: "public" });
+    f.segments.set(SEG, { ...f.segments.get(SEG)!, details: JSON.stringify({ airline: "United", seat: "14C" }),
+      image_tag: "denver", image_revision: null });
+    return f;
+  }
+
+  test("visitors and other members see the item but not seats or confirmation numbers", async () => {
+    const f = publicTrip();
+    const anon = await (await app.fetch(new Request(`${ORIGIN}/trips/${TRIP}`), f.env)).text();
+    const member = await (await f.request(`/trips/${TRIP}`, {}, { uid: "su_lee", sub: "lee", role: "member" })).text();
+    for (const html of [anon, member]) {
+      expect(html).toContain("Airline: United");
+      expect(html).toContain("Departs 2026-11-01 08:30");
+      expect(html).toContain("/g/renner/denver/md.webp");
+      expect(html).not.toContain("14C");
+      expect(html).not.toContain("XYZ");
+    }
+  });
+
+  test("travelers on the trip and staff see them", async () => {
+    const f = publicTrip();
+    const traveler = await (await f.request(`/trips/${TRIP}`, {}, { role: "member" })).text(); // su_dana is on the trip
+    const staff = await (await f.request(`/trips/${TRIP}`, {}, { uid: "su_lee", sub: "lee" })).text();
+    for (const html of [traveler, staff]) {
+      expect(html).toContain("Seat: 14C");
+      expect(html).toContain("Confirmation: XYZ");
+    }
   });
 });

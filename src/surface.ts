@@ -45,6 +45,7 @@ export const TRIPS_CSS = `
 
 .segments{list-style:none;padding:0;margin:0;display:grid;gap:10px}
 .segment{border:1px solid var(--rule);border-radius:14px;padding:14px;background:var(--raised)}
+.segment-image{display:block;width:100%;aspect-ratio:3/2;object-fit:cover;border-radius:10px;margin:0 0 10px}
 .segment .type{font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;
   color:var(--brand);margin:0 0 4px}
 .segment h3{font:700 16px/1.3 var(--heading);margin:0 0 4px}
