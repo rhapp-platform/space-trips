@@ -521,3 +521,54 @@ describe("Trip cover image", () => {
     expect(page).toContain("/g/renner/beach/md.webp");
   });
 });
+
+describe("Public trip page: travelers", () => {
+  function publicTrip(members?: ReturnType<typeof fakeMemberAccounts>) {
+    const f = fixture({ members });
+    f.trips.set(TRIP, { ...f.trips.get(TRIP)!, visibility: "public" });
+    f.members.push({ trip_id: TRIP, member_id: "su_lee", role: "traveler", added_at: "x" },
+      { trip_id: TRIP, member_id: "su_gone", role: "viewer", added_at: "x" });
+    return f;
+  }
+  const noSecrets = (html: string) => {
+    expect(html).not.toMatch(/su_(dana|lee|gone)/);
+    expect(html).not.toContain("@example.com");
+    expect(html).not.toContain("pbkdf2");
+  };
+
+  test("visitors and other members see a count of who's going, never who, and nothing is looked up", async () => {
+    const accounts = fakeMemberAccounts();
+    const f = publicTrip(accounts);
+    const anon = await (await app.fetch(new Request(`${ORIGIN}/trips/${TRIP}`), f.env)).text();
+    f.members.splice(f.members.findIndex((m) => m.member_id === "su_lee"), 1); // su_lee: a member, not on the trip
+    const member = await (await f.request(`/trips/${TRIP}`, {}, { uid: "su_lee", sub: "lee", role: "member" })).text();
+    expect(anon).toContain("2 people are going.");
+    expect(member).toContain("1 person is going.");
+    for (const html of [anon, member]) {
+      noSecrets(html);
+      expect(html).not.toContain("Dana Reyes");
+    }
+    expect(accounts.ops).toEqual([]);
+  });
+
+  test("travelers and staff see names and roles; a name that can't be found reads 'A member'", async () => {
+    const f = publicTrip(fakeMemberAccounts());
+    const traveler = await (await f.request(`/trips/${TRIP}`, {}, { role: "member" })).text(); // su_dana is on it
+    expect(traveler).toContain("Dana Reyes");
+    expect(traveler).toContain("Organizer");
+    expect(traveler).toContain(">lee<");
+    expect(traveler).toContain("A member"); // su_gone is disabled, so the directory leaves it out
+    noSecrets(traveler);
+  });
+
+  test("with the directory down or absent, insiders still get the page, without IDs", async () => {
+    for (const members of [fakeMemberAccounts({ down: true }), undefined]) {
+      const f = publicTrip(members);
+      const res = await f.request(`/trips/${TRIP}`);
+      expect(res.status).toBe(200);
+      const html = await res.text();
+      expect(html.match(/A member/g)?.length).toBe(3);
+      noSecrets(html);
+    }
+  });
+});

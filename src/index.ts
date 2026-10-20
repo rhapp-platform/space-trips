@@ -12,6 +12,7 @@ import { escapeHtml as esc, readSpaceRecord, renderState, resolveSpaceName } fro
 import { artworkUrl } from "../../home/src/image-field";
 import { admin, canManageTrips } from "./admin";
 import { kindOf, shownDetails } from "./kinds";
+import { people, type Person } from "./people";
 import { callTrips } from "./trips";
 import { notAvailable, page, scope, unavailable, type Scope } from "./scope";
 import { SURFACE } from "./surface";
@@ -115,11 +116,42 @@ function renderAgenda(trips: TripRow[], spaceName: string, signedIn: boolean, gn
  * and private details (seat, room): a public trip page is readable by anyone,
  * and a booking reference plus a name is enough to change a booking.
  */
+const ROLE_LABEL: Record<string, string> = { owner: "Organizer", traveler: "Traveler", viewer: "Following" };
+
+/**
+ * Who's on the trip. Insiders see names; everyone else sees how many are
+ * traveling, never who. A member ID is never shown: a name that can't be
+ * looked up reads "A member".
+ */
+function renderTravelers(members: MemberRow[], names: Map<string, Person> | null): string {
+  const traveling = members.filter(m => m.role !== "viewer").length;
+  if (!names) {
+    return traveling ? `<p class="travelers-count">${traveling} ${traveling === 1 ? "person is" : "people are"} going.</p>` : "";
+  }
+  if (!members.length) return "";
+  return `<div class="members">${members
+    .map(m => `<span class="member-chip">${esc(names.get(m.member_id)?.label ?? "A member")}<span class="role">${esc(ROLE_LABEL[m.role] ?? m.role)}</span></span>`)
+    .join("")}</div>`;
+}
+
+/** Names for insiders. A directory outage degrades to "A member", never to IDs or an error page. */
+async function travelerNames(env: Env, gn: string, members: MemberRow[]): Promise<Map<string, Person>> {
+  const directory = people(env, gn);
+  if (!directory || !members.length) return new Map();
+  try {
+    return await directory.find(members.map(m => m.member_id));
+  } catch (error) {
+    console.error("[space-trips] traveler names unavailable", (error as Error).message);
+    return new Map();
+  }
+}
+
 function renderTripDetail(
   detail: TripDetail,
   gn: string,
   environment: string,
   insider: boolean,
+  names: Map<string, Person> | null,
 ): string {
   const { trip, segments, members } = detail;
   const dates = dateRange(trip);
@@ -149,13 +181,7 @@ function renderTripDetail(
         .join("")}</ul>`
     : "<p>No itinerary segments yet.</p>";
 
-  const memberChips = members.length
-    ? `<div class="members">${members
-        .map(
-          m => `<span class="member-chip">${esc(m.member_id)}<span class="role">${esc(m.role)}</span></span>`,
-        )
-        .join("")}</div>`
-    : "";
+  const travelers = renderTravelers(members, insider ? names : null);
 
   const draftNote = trip.status === "draft"
     ? `<p class="draft-note" role="note">This trip is a draft. Only staff can see it. Set its status to Active in Manage trips to share it.</p>`
@@ -174,7 +200,7 @@ function renderTripDetail(
   </div>
   <h2>Itinerary</h2>
   ${segList}
-  ${memberChips ? `<h2>Travelers</h2>${memberChips}` : ""}`;
+  ${travelers ? `<h2>Travelers</h2>${travelers}` : ""}`;
 }
 
 // ── Agenda ───────────────────────────────────────────────────────────────────
@@ -248,7 +274,8 @@ app.get("/trips/:id", async (c) => {
     // Drafts, private and members-only trips must never be edge-cached.
     cache: draft ? "no-store" : trip.visibility === "public" ? s.cache : "private",
     description: trip.description?.slice(0, 300) ?? undefined,
-    content: renderTripDetail(result.value, s.gn, s.environment, staff || onTrip),
+    content: renderTripDetail(result.value, s.gn, s.environment, staff || onTrip,
+      staff || onTrip ? await travelerNames(c.env, s.gn, members) : null),
   });
 });
 

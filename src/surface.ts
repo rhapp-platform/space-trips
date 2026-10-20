@@ -47,6 +47,7 @@ export const TRIPS_CSS = `
 .trip-meta .k{flex:none;width:20px;text-align:center;opacity:.6}
 
 .segments{list-style:none;padding:0;margin:0;display:grid;gap:10px}
+.travelers-count{color:var(--muted);margin:0}
 .segment{border:1px solid var(--rule);border-radius:14px;padding:14px;background:var(--raised)}
 .segment-image{display:block;width:100%;aspect-ratio:3/2;object-fit:cover;border-radius:10px;margin:0 0 10px}
 .segment .type{font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;

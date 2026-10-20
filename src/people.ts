@@ -1,6 +1,6 @@
 /**
- * Member lookups for the trips admin: search the space's people and name the
- * ones already on a trip.
+ * Member lookups: the admin searches the space's people, and the admin and
+ * the trip page (for travelers and staff only) name the people on a trip.
  *
  * Reads go through the space store's member accounts entrypoint, with the same
  * begin/finish permit as home/src/members.ts. That entrypoint returns full
