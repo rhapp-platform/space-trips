@@ -391,6 +391,59 @@ describe("Public pages and drafts", () => {
 const REV = "b".repeat(64);
 const FLIGHT_FORM = { type: "flight", label: "Flight to Denver", start_at: "", end_at: "", confirmation_ref: "", notes: "" };
 
+describe("Time zones", () => {
+  // Across the date line: leaves Tokyo 21:00 and lands in Honolulu at 09:00 the same date, ten hours later.
+  const WEST = { ...FLIGHT_FORM, start_at: "2026-07-01T21:00", end_at: "2026-07-01T09:00", start_tz: "asia/tokyo", end_tz: "Pacific/Honolulu" };
+  const added = (f: ReturnType<typeof fixture>) => f.writes().filter((c) => c.op === "addSegment").map((c) => c.args[2] as Record<string, unknown>);
+
+  test("a flight can land at an earlier clock time; zones are saved in canonical form", async () => {
+    const f = fixture();
+    const r = await f.post(`${BASE}/segments/new`, WEST);
+    expect(r.status).toBe(303);
+    expect(added(f)[0]!.details).toEqual({ start_tz: "Asia/Tokyo", end_tz: "Pacific/Honolulu" });
+    // Without zones the same times read as ending first, as before.
+    const html = await (await f.post(`${BASE}/segments/new`, { ...WEST, start_tz: "", end_tz: "" })).text();
+    expect(html).toContain("“Arrives” is before “Departs”. Check the two times.");
+    expect(added(f)).toHaveLength(1);
+  });
+
+  test("an unknown zone is refused with the person's values kept", async () => {
+    const f = fixture();
+    const html = await (await f.post(`${BASE}/segments/new`, { ...WEST, end_tz: "New York" })).text();
+    expect(html).toContain("The time zone for “Arrives” isn&#39;t one we recognise.");
+    expect(html).toContain('value="New York"');
+    expect(added(f)).toHaveLength(0);
+  });
+
+  test("a zone without its time is not saved", async () => {
+    const f = fixture();
+    await f.post(`${BASE}/segments/new`, { ...WEST, end_at: "" });
+    expect(added(f)[0]!.details).toEqual({ start_tz: "Asia/Tokyo" });
+  });
+
+  test("the form suggests zones; a new item starts where the last one ended; editing keeps the item's own", async () => {
+    const f = fixture();
+    f.segments.set(SEG, { ...f.segments.get(SEG)!, details: JSON.stringify({ start_tz: "America/Chicago", end_tz: "America/Denver" }) });
+    const fresh = await (await f.request(`${BASE}/segments/new?type=hotel`)).text();
+    expect(fresh).toContain('<datalist id="tz-names">');
+    expect(fresh).toContain('<option value="Europe/Rome">');
+    expect(fresh).toMatch(/name="start_tz" value="America\/Denver"/);
+    expect(fresh).toMatch(/name="end_tz" value="America\/Denver"/);
+    const edit = await (await f.request(`${BASE}/segments/${SEG}/edit`)).text();
+    expect(edit).toMatch(/name="start_tz" value="America\/Chicago"/);
+  });
+
+  test("times show their zone on the trip page and in the admin", async () => {
+    const f = fixture();
+    f.trips.set(TRIP, { ...f.trips.get(TRIP)!, visibility: "public" });
+    f.segments.set(SEG, { ...f.segments.get(SEG)!, details: JSON.stringify({ start_tz: "America/Chicago" }) });
+    const page = await (await app.fetch(new Request(`${ORIGIN}/trips/${TRIP}`), f.env)).text();
+    expect(page).toContain("Departs 2026-11-01 08:30 (Chicago, GMT-6)");
+    expect(page).not.toContain("start_tz");
+    expect(await (await f.request(BASE)).text()).toContain("2026-11-01 08:30 (Chicago, GMT-6)");
+  });
+});
+
 describe("Item kinds, details and images", () => {
   test("adding starts by choosing a kind; each kind asks for its own fields", async () => {
     const f = fixture();

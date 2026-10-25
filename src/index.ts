@@ -11,7 +11,8 @@ import { Hono } from "hono";
 import { escapeHtml as esc, readSpaceRecord, renderState, resolveSpaceName } from "../../space-surface/src";
 import { artworkUrl } from "../../home/src/image-field";
 import { admin, canManageTrips } from "./admin";
-import { kindOf, shownDetails } from "./kinds";
+import { kindOf, readDetails, shownDetails } from "./kinds";
+import { when } from "./time";
 import { people, type Person } from "./people";
 import { callTrips } from "./trips";
 import { notAvailable, page, scope, unavailable, type Scope } from "./scope";
@@ -77,10 +78,6 @@ function dateRange(trip: TripRow): string {
 const SEGMENT_GLYPH: Record<string, string> = {
   flight: "✈", hotel: "🏨", car: "🚗", activity: "🎯", other: "📌",
 };
-
-function when(value: string | null): string {
-  return value ? value.replace("T", " ") : "";
-}
 
 function coverUrl(trip: TripRow, gn: string, environment: string, size: "sm" | "md"): string | null {
   return trip.cover_tag ? artworkUrl(gn, trip.cover_tag, trip.cover_revision, size, environment) : null;
@@ -161,9 +158,10 @@ function renderTripDetail(
         .map(
           seg => {
             const kind = kindOf(seg.type);
+            const zones = readDetails(seg.details);
             const times = [
-              seg.start_at ? `${kind?.start ?? "Starts"} ${when(seg.start_at)}` : "",
-              seg.end_at ? `${kind?.end ?? "Ends"} ${when(seg.end_at)}` : "",
+              seg.start_at ? `${kind?.start ?? "Starts"} ${when(seg.start_at, zones.start_tz)}` : "",
+              seg.end_at ? `${kind?.end ?? "Ends"} ${when(seg.end_at, zones.end_tz)}` : "",
             ].filter(Boolean);
             return `<li class="segment">
         ${seg.image_tag

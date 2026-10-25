@@ -10,6 +10,7 @@ import { roleLevel } from "../../sets/sets/auth/shared/role-hierarchy";
 import { IMAGE_PICKER_JS } from "../../home/src/generated/image-picker";
 import { artworkUrl, imageField, imageLibraryRequest, IMAGE_FIELD_JS } from "../../home/src/image-field";
 import { DETAIL_MAX, KINDS, kindOf, readDetails, shownDetails, type Kind } from "./kinds";
+import { ZONE_MAX, canonicalZone, endsBeforeStart, when, zoneNames } from "./time";
 import { people, type People, type Person } from "./people";
 import { callTrips } from "./trips";
 import { scope, type Scope } from "./scope";
@@ -196,10 +197,6 @@ function dateRange(trip: TripRow): string {
   return "";
 }
 
-function when(value: string | null): string {
-  return value ? value.replace("T", " ") : "";
-}
-
 function notice(c: AdminContext): string {
   const message = DONE[c.req.query("done") ?? ""];
   return message ? `<p class="admin-notice" role="status">${esc(message)}</p>` : "";
@@ -326,7 +323,17 @@ function segmentWrite(form: Form, kind: Kind, gn: string): { write?: Record<stri
   for (const [value, which] of [[start, kind.start], [end, kind.end]] as const) {
     if (value && !DATETIME.test(value)) return { error: `“${which}” isn't complete. Pick a date and a time.` };
   }
-  if (start && end && end < start) return { error: `“${kind.end}” is before “${kind.start}”. Check the two times.` };
+  const zones: (string | null)[] = [];
+  for (const [value, which] of [[form.start_tz, kind.start], [form.end_tz, kind.end]] as const) {
+    const zone = value?.trim() ? canonicalZone(value) : null;
+    if (value?.trim() && !zone) return { error: `The time zone for “${which}” isn't one we recognise. Use a region and city, like “Europe/Rome” or “America/Chicago”.` };
+    zones.push(zone);
+  }
+  // A zone describes its time, so it is kept only alongside one.
+  const [startZone, endZone] = [start ? zones[0]! : null, end ? zones[1]! : null];
+  if (start && end && endsBeforeStart(start, startZone, end, endZone)) {
+    return { error: `“${kind.end}” is before “${kind.start}”. Check the two times${startZone || endZone ? " and their time zones" : ""}.` };
+  }
   const limits: [string, string, number][] = [
     ["confirmation_ref", "Confirmation number", 100],
     ["notes", "Notes", 4000],
@@ -338,7 +345,9 @@ function segmentWrite(form: Form, kind: Kind, gn: string): { write?: Record<stri
   }
   const image = imageWrite(form.imageSelection, gn);
   if (image.error) return { error: image.error };
-  const details = Object.fromEntries(kind.details.map((f) => [f.key, form[`d_${f.key}`] ?? ""]).filter(([, v]) => v));
+  const details = Object.fromEntries(
+    [...kind.details.map((f) => [f.key, form[`d_${f.key}`] ?? ""]), ["start_tz", startZone ?? ""], ["end_tz", endZone ?? ""]].filter(([, v]) => v),
+  );
   return {
     write: {
       type: kind.type,
@@ -385,13 +394,16 @@ function tripForm(s: Scope, action: string, values: Form, trip: TripRow | undefi
   </form>`;
 }
 
-function segmentFormValues(kind: Kind, seg?: SegmentRow): Form {
+/** `zone` starts a new item's time zones: where the previous item ended. */
+function segmentFormValues(kind: Kind, seg?: SegmentRow, zone = ""): Form {
   const details = readDetails(seg?.details);
   return {
     type: kind.type,
     label: seg?.label ?? "",
     start_at: seg?.start_at ?? "",
     end_at: seg?.end_at ?? "",
+    start_tz: seg ? (details.start_tz ?? "") : zone,
+    end_tz: seg ? (details.end_tz ?? "") : zone,
     location: seg?.location ?? "",
     confirmation_ref: seg?.confirmation_ref ?? "",
     notes: seg?.notes ?? "",
@@ -433,6 +445,12 @@ function segmentForm(
       ${field("start_at", kind.start, input("start_at", values.start_at, 'type="datetime-local"'))}
       ${field("end_at", kind.end, input("end_at", values.end_at, 'type="datetime-local"'))}
     </div>
+    <div class="admin-pair">
+      ${field("start_tz", "Time zone", input("start_tz", values.start_tz ?? "", `list="tz-names" maxlength="${ZONE_MAX}" autocomplete="off" placeholder="Europe/Rome"`),
+        "Optional. Where the time is, so a flight can leave in one zone and land in another.")}
+      ${field("end_tz", "Time zone", input("end_tz", values.end_tz ?? "", `list="tz-names" maxlength="${ZONE_MAX}" autocomplete="off" placeholder="America/Chicago"`))}
+    </div>
+    <datalist id="tz-names">${zoneNames().map((z) => `<option value="${esc(z)}">`).join("")}</datalist>
     ${kind.location ? field("location", kind.location, input("location", values.location, 'maxlength="300"')) : ""}
     ${details}
     ${field("confirmation_ref", "Confirmation number", input("confirmation_ref", values.confirmation_ref, 'maxlength="100" autocomplete="off"'), "Only travelers on this trip and staff see this.")}
@@ -627,7 +645,7 @@ admin.get("/:id", async (c) => {
         <p class="type">${esc(kindOf(seg.type)?.name ?? seg.type)}</p>
         <strong>${esc(seg.label)}</strong>
         ${shownDetails(seg, true).map(([k, v]) => `<br><small>${esc(k)}: ${esc(v)}</small>`).join("")}
-        ${seg.start_at || seg.end_at ? `<br><small>${esc(when(seg.start_at))}${seg.end_at ? ` → ${esc(when(seg.end_at))}` : ""}</small>` : ""}
+        ${seg.start_at || seg.end_at ? `<br><small>${esc(when(seg.start_at, readDetails(seg.details).start_tz))}${seg.end_at ? ` → ${esc(when(seg.end_at, readDetails(seg.details).end_tz))}` : ""}</small>` : ""}
         ${seg.location ? `<br><small>📍 ${esc(seg.location)}</small>` : ""}
         ${seg.confirmation_ref ? `<br><small>Confirmation: ${esc(seg.confirmation_ref)}</small>` : ""}
         <div class="admin-actions">
@@ -811,7 +829,8 @@ admin.get("/:id/segments/new", async (c) => {
   if (response) return response;
   const trip = detail!.trip;
   const kind = newKind(c.req.query("type"));
-  if (kind) return segmentPage(s, trip, path, `Add a ${kind.name.toLowerCase()}`, kind, segmentFormValues(kind), undefined, "Add to itinerary");
+  const last = readDetails(detail!.segments.at(-1)?.details);
+  if (kind) return segmentPage(s, trip, path, `Add a ${kind.name.toLowerCase()}`, kind, segmentFormValues(kind, undefined, last.end_tz ?? last.start_tz ?? ""), undefined, "Add to itinerary");
   // First choose the kind: each asks for different details.
   return adminPage(
     s,
