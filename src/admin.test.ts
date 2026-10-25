@@ -159,6 +159,12 @@ describe("Trips admin access", () => {
   });
 });
 
+test("the management bar names Trips and links to the public list", async () => {
+  const html = await (await fixture().request("/trips/admin")).text();
+  expect(html).toMatch(/<li><a href="\/manage">[^<]+<\/a><\/li>/);
+  expect(html).toContain('<a class="mg-view" href="/trips">');
+});
+
 describe("Trips", () => {
   test("create posts to the store as the viewer and redirects to the new trip", async () => {
     const f = fixture();

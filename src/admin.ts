@@ -37,10 +37,7 @@ const ADMIN_SURFACE = defineSurface({
   forms: true,
 });
 
-// "trips" is not yet a MANAGEMENT_DESTINATIONS slug in space-surface. The bar
-// renders without it (Space › page title, "View space"); register it there to
-// get the Trips crumb and hub entry.
-const MANAGEMENT = "trips" as ManagementArea;
+const MANAGEMENT: ManagementArea = "trips";
 
 const TRP = /^trp_[0-9A-Za-z]{26}$/;
 const TSEG = /^tseg_[0-9A-Za-z]{26}$/;
