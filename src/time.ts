@@ -64,3 +64,20 @@ export function endsBeforeStart(start: string, startZone: string | null, end: st
   const a = startZone ?? endZone, b = endZone ?? startZone;
   return a && b ? instant(end, b) < instant(start, a) : end < start;
 }
+
+/**
+ * A note when an item falls outside the trip's dates, or null. Dates are compared
+ * as written: trip dates and item times are both local to where things happen.
+ * It's a hint, not an error: a flight out the day before is ordinary.
+ */
+export function outsideTrip(
+  trip: { start_date: string | null; end_date: string | null },
+  item: { start_at: string | null; end_at: string | null },
+): string | null {
+  const first = (item.start_at ?? item.end_at)?.slice(0, 10);
+  const last = (item.end_at ?? item.start_at)?.slice(0, 10);
+  if (!first || !last) return null;
+  if (trip.start_date && first < trip.start_date) return `This is before the trip starts on ${trip.start_date}. Check the date, or change the trip's dates.`;
+  if (trip.end_date && last > trip.end_date) return `This is after the trip ends on ${trip.end_date}. Check the date, or change the trip's dates.`;
+  return null;
+}

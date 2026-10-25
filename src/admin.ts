@@ -10,7 +10,7 @@ import { roleLevel } from "../../sets/sets/auth/shared/role-hierarchy";
 import { IMAGE_PICKER_JS } from "../../home/src/generated/image-picker";
 import { artworkUrl, imageField, imageLibraryRequest, IMAGE_FIELD_JS } from "../../home/src/image-field";
 import { DETAIL_MAX, KINDS, kindOf, readDetails, shownDetails, type Kind } from "./kinds";
-import { ZONE_MAX, canonicalZone, endsBeforeStart, when, zoneNames } from "./time";
+import { ZONE_MAX, canonicalZone, endsBeforeStart, outsideTrip, when, zoneNames } from "./time";
 import { people, type People, type Person } from "./people";
 import { callTrips } from "./trips";
 import { scope, type Scope } from "./scope";
@@ -92,6 +92,7 @@ const CSS = `
 .admin-danger{background:#9c2525!important;color:white!important;border-color:#9c2525!important}
 .admin-notice{padding:16px;border:1px solid var(--rule);border-radius:12px;background:var(--soft);margin:16px 0}
 .admin-error{padding:16px;border:1px solid #9c2525;border-radius:12px;margin:16px 0}
+.admin-hint{margin:10px 0 0;padding:10px 12px;border-left:4px solid #b26b00;background:var(--soft);border-radius:6px}
 .admin-form{display:grid;gap:16px;margin:20px 0}
 .admin-field{display:grid;gap:6px}.admin-field>span{font-weight:700}
 .admin-field small{color:var(--muted)}
@@ -195,6 +196,10 @@ function dateRange(trip: TripRow): string {
   if (trip.start_date && trip.end_date) return `${trip.start_date} – ${trip.end_date}`;
   if (trip.start_date) return `From ${trip.start_date}`;
   return "";
+}
+
+function hint(message: string | null): string {
+  return message ? `<p class="admin-hint">${esc(message)}</p>` : "";
 }
 
 function notice(c: AdminContext): string {
@@ -648,6 +653,7 @@ admin.get("/:id", async (c) => {
         ${seg.start_at || seg.end_at ? `<br><small>${esc(when(seg.start_at, readDetails(seg.details).start_tz))}${seg.end_at ? ` → ${esc(when(seg.end_at, readDetails(seg.details).end_tz))}` : ""}</small>` : ""}
         ${seg.location ? `<br><small>📍 ${esc(seg.location)}</small>` : ""}
         ${seg.confirmation_ref ? `<br><small>Confirmation: ${esc(seg.confirmation_ref)}</small>` : ""}
+        ${hint(outsideTrip(trip, seg))}
         <div class="admin-actions">
           <a href="${base}/segments/${esc(seg.id)}/edit">Edit</a>
           <a href="${base}/segments/${esc(seg.id)}/remove">Remove</a>

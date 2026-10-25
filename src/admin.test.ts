@@ -444,6 +444,19 @@ describe("Time zones", () => {
   });
 });
 
+describe("Items outside the trip's dates", () => {
+  test("the admin trip page points out an item that starts before the trip; visitors never see it", async () => {
+    const f = fixture();
+    expect(await (await f.request(BASE)).text()).not.toContain('<p class="admin-hint">');
+    f.segments.set(SEG, { ...f.segments.get(SEG)!, start_at: "2026-10-30T08:30" });
+    f.trips.set(TRIP, { ...f.trips.get(TRIP)!, visibility: "public" });
+    expect(await (await f.request(BASE)).text()).toContain(
+      "This is before the trip starts on 2026-11-01. Check the date, or change the trip&#39;s dates.",
+    );
+    expect(await (await app.fetch(new Request(`${ORIGIN}/trips/${TRIP}`), f.env)).text()).not.toContain("before the trip starts");
+  });
+});
+
 describe("Item kinds, details and images", () => {
   test("adding starts by choosing a kind; each kind asks for its own fields", async () => {
     const f = fixture();
