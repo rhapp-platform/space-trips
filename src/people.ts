@@ -9,6 +9,9 @@
  *
  * Without the MEMBER_ACCOUNTS binding, `people()` returns null and the admin
  * falls back to entering a member ID by hand.
+ *
+ * The CLI (admin-only, see cli.ts) also needs a person's email and username:
+ * a trip file names travelers by email. `Contact` adds those two and nothing else.
  */
 import type { Env, MemberAccounts, MemberPermit, MemberResult } from "./types";
 
@@ -17,17 +20,28 @@ export interface Person {
   label: string;
 }
 
+/** A person as the admin CLI names them: never credentials. */
+export interface Contact extends Person {
+  email: string | null;
+  username: string;
+}
+
 export interface People {
   /** Enabled members whose username, email or external id contains `query`. */
   search(query: string): Promise<Person[]>;
   /** Names for the given ids; unknown or disabled ids are left out. */
   find(ids: string[]): Promise<Map<string, Person>>;
+  /** The enabled member with this email, username or member ID, or null. */
+  resolve(ref: string): Promise<Contact | null>;
+  /** Email and username for the given ids; unknown or disabled ids are left out. */
+  contacts(ids: string[]): Promise<Map<string, Contact>>;
 }
 
 interface UserRow {
   id: string;
   username: string;
   directory_name: string | null;
+  email?: string | null;
   status: string;
 }
 
@@ -59,6 +73,11 @@ async function withPermit<T>(
   return value;
 }
 
+function contact(row: UserRow | null): Contact | null {
+  const p = person(row);
+  return p && { ...p, email: row!.email?.trim() || null, username: row!.username };
+}
+
 export function people(env: Env, gn: string): People | null {
   const binding = env.MEMBER_ACCOUNTS;
   if (!binding) return null;
@@ -75,6 +94,23 @@ export function people(env: Env, gn: string): People | null {
         const found = new Map<string, Person>();
         for (const id of [...new Set(ids)].slice(0, FIND_LIMIT)) {
           const p = person((await call("findUserById", [id])) as UserRow | null);
+          if (p) found.set(id, p);
+        }
+        return found;
+      }),
+    resolve: (ref) =>
+      withPermit(binding, gn, async (call) => {
+        const value = ref.trim();
+        if (!value || value.length > 256) return null;
+        // findUserByIdentifier matches a username as given, or a lowercased email.
+        const byIdentifier = contact((await call("findUserByIdentifier", [value.includes("@") ? value.toLowerCase() : value])) as UserRow | null);
+        return byIdentifier ?? contact((await call("findUserById", [value])) as UserRow | null);
+      }),
+    contacts: (ids) =>
+      withPermit(binding, gn, async (call) => {
+        const found = new Map<string, Contact>();
+        for (const id of [...new Set(ids)].slice(0, FIND_LIMIT)) {
+          const p = contact((await call("findUserById", [id])) as UserRow | null);
           if (p) found.set(id, p);
         }
         return found;
