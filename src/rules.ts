@@ -54,13 +54,31 @@ export const MEMBER_ID_MAX = 256;
 
 // ── Validation ──────────────────────────────────────────────────────────────
 
+/**
+ * How a refusal tells the person what to do. The checks are the same
+ * everywhere; only the advice differs between a form and a file.
+ */
+export interface Say {
+  date: string;
+  dateTime: string;
+  status: string;
+  visibility: string;
+}
+
+export const FORM_SAY: Say = {
+  date: "Pick it from the calendar.",
+  dateTime: "Pick a date and a time.",
+  status: "Choose a status from the list.",
+  visibility: "Choose who can see this trip.",
+};
+
 export function validDate(value: string): boolean {
   if (!DATE.test(value)) return false;
   const d = new Date(`${value}T00:00:00Z`);
   return !Number.isNaN(d.getTime()) && d.toISOString().startsWith(value);
 }
 
-export function tripWrite(form: Form, gn: string): { write?: Record<string, unknown>; error?: string } {
+export function tripWrite(form: Form, gn: string, say: Say = FORM_SAY): { write?: Record<string, unknown>; error?: string } {
   const title = form.title ?? "";
   if (!title) return { error: "Give the trip a name, like “Spring tour 2027”." };
   if (title.length > 200) return { error: "Keep the trip name to 200 characters or fewer." };
@@ -69,11 +87,11 @@ export function tripWrite(form: Form, gn: string): { write?: Record<string, unkn
   const start = form.start_date ?? "";
   const end = form.end_date ?? "";
   for (const [value, which] of [[start, "start"], [end, "end"]] as const) {
-    if (value && !validDate(value)) return { error: `The ${which} date isn't a real date. Pick it from the calendar.` };
+    if (value && !validDate(value)) return { error: `The ${which} date isn't a real date. ${say.date}` };
   }
   if (start && end && end < start) return { error: "The trip ends before it starts. Check the two dates." };
-  if (!STATUSES.some(([v]) => v === form.status)) return { error: "Choose a status from the list." };
-  if (!VISIBILITIES.some(([v]) => v === form.visibility)) return { error: "Choose who can see this trip." };
+  if (!STATUSES.some(([v]) => v === form.status)) return { error: say.status };
+  if (!VISIBILITIES.some(([v]) => v === form.visibility)) return { error: say.visibility };
   const cover = imageWrite(form.imageSelection, gn, ["cover_tag", "cover_revision"]);
   if (cover.error) return { error: cover.error };
   return {
@@ -112,14 +130,14 @@ export function imageWrite(
   return { write: { [tagKey]: tag, [revisionKey]: revision ?? null } };
 }
 
-export function segmentWrite(form: Form, kind: Kind, gn: string): { write?: Record<string, unknown>; error?: string } {
+export function segmentWrite(form: Form, kind: Kind, gn: string, say: Say = FORM_SAY): { write?: Record<string, unknown>; error?: string } {
   const itemLabel = form.label ?? "";
   if (!itemLabel) return { error: `Give this item a short name, like “${kind.example}”.` };
   if (itemLabel.length > 200) return { error: "Keep the name to 200 characters or fewer." };
   const start = form.start_at ?? "";
   const end = form.end_at ?? "";
   for (const [value, which] of [[start, kind.start], [end, kind.end]] as const) {
-    if (value && !DATETIME.test(value)) return { error: `“${which}” isn't complete. Pick a date and a time.` };
+    if (value && !DATETIME.test(value)) return { error: `“${which}” isn't complete. ${say.dateTime}` };
   }
   const zones: (string | null)[] = [];
   for (const [value, which] of [[form.start_tz, kind.start], [form.end_tz, kind.end]] as const) {
