@@ -213,10 +213,24 @@ describe("apply: refusals", () => {
     expect(store.calls.some((c) => c.op === "create")).toBe(false);
   });
 
-  test("a store failure part way says how far it got", async () => {
-    const { run } = setup({ fail: { op: "setMember", status: 503, message: "Trips storage is not ready." } });
+  test("a store failure part way through a new trip names the trip, and the file with its id finishes it", async () => {
+    const { run, store } = setup({ fail: { op: "setMember", status: 503, message: "Trips storage is not ready." } });
     const r = failure(await run("apply", { document: DENVER }));
-    expect(r.message).toBe("Stopped after 3 changes of 4: Trips storage is not ready. Run the same command again to finish; it shows only what is left.");
+    const id = store.calls.find((c) => c.op === "create")!.args[0] as string;
+    expect(r.message).toBe(`Stopped after 3 changes of 4: Trips storage is not ready. The trip was created as ${id}. To finish, add  id = "${id}"  at the top of the file and run the same command again; it shows only what is left.`);
+    // The same file again, without the id, is refused as a twin; with it, only the traveler is left.
+    expect(failure(await run("apply", { document: DENVER, dryRun: true })).message).toContain(`A trip called “Denver offsite” already exists (${id})`);
+    const steps = value(await run("apply", { document: { id, ...DENVER }, dryRun: true })).plan.steps;
+    expect(steps.map((s: any) => s.op)).toEqual(["set-traveler"]);
+  });
+
+  test("a store failure part way through an existing trip says to run it again", async () => {
+    const { run } = setup({ fail: { op: "setMember", status: 503, message: "Trips storage is not ready." } });
+    const { document } = value(await run("show", { trip: TRIP }));
+    document.title = "Spring tour, renamed";
+    document.traveler.push({ member: "Lee@Example.com" });
+    const r = failure(await run("apply", { document }));
+    expect(r.message).toBe("Stopped after 1 change of 2: Trips storage is not ready. Run the same command again to finish; it shows only what is left.");
   });
 });
 
@@ -270,5 +284,14 @@ describe("without a member directory", () => {
     const { document } = value(await run("show", { trip: TRIP }));
     expect(document.traveler).toEqual([{ member: "su_dana", role: "owner" }]);
     expect(value(await run("apply", { document, dryRun: true })).plan.steps).toEqual([]);
+  });
+
+  test("a new traveler is refused rather than stored unchecked", async () => {
+    const { run, store } = setup({ directory: false });
+    const { document } = value(await run("show", { trip: TRIP }));
+    document.traveler.push({ member: "lee@example.com" });
+    expect(failure(await run("apply", { document, dryRun: true })).message).toContain("the member list can't be searched right now");
+    expect(failure(await run("traveler-add", { trip: TRIP, member: "lee@example.com" })).status).toBe(503);
+    expect(store.calls.some((c) => c.op === "setMember")).toBe(false);
   });
 });

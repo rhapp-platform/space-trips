@@ -17,7 +17,7 @@
 import { KINDS, kindOf, readDetails, type Kind } from "./kinds";
 import type { Contact, People } from "./people";
 import {
-  MEMBER_ID_MAX, MEMBER_ROLES, STATUSES, TRP, TSEG, VISIBILITIES,
+  MEMBER_ROLES, STATUSES, TRP, TSEG, VISIBILITIES,
   newId, segmentWrite, tripWrite, type Form, type Say,
 } from "./rules";
 import { outsideTrip } from "./time";
@@ -304,7 +304,9 @@ async function resolveTraveler(deps: CliDeps, ref: string, onTrip: MemberRow[], 
   // Someone already on the trip, named the way an export names them.
   const already = onTrip.find((m) => m.member_id === ref || memberRef(m.member_id, known).toLowerCase() === ref.toLowerCase());
   if (already) return already.member_id;
-  if (!deps.people) return ref.length <= MEMBER_ID_MAX ? ref : null;
+  // Without the member list nothing can be checked, so nothing new is taken on
+  // trust: an email typed here would otherwise be stored as a member ID.
+  if (!deps.people) return "unavailable";
   try {
     return (await deps.people.resolve(ref))?.id ?? null;
   } catch {
@@ -500,10 +502,15 @@ function shownPlan(plan: Plan) {
 async function runPlan(deps: CliDeps, gn: string, actor: string, plan: Plan): Promise<CliResult> {
   let tripId = plan.current?.trip.id ?? "";
   let done = 0;
+  // Once the trip exists, a run of the same file would find it by title and
+  // refuse; finishing needs the file to name the new trip by its id.
+  const created = () => !plan.current && done > 0;
   const stop = (r: { status: number; message: string }) =>
-    no(r.status, done
-      ? `Stopped after ${plural(done, "change")} of ${plan.steps.length}: ${r.message} Run the same command again to finish; it shows only what is left.`
-      : r.message);
+    no(r.status, !done
+      ? r.message
+      : created()
+        ? `Stopped after ${plural(done, "change")} of ${plan.steps.length}: ${r.message} The trip was created as ${tripId}. To finish, add  id = "${tripId}"  at the top of the file and run the same command again; it shows only what is left.`
+        : `Stopped after ${plural(done, "change")} of ${plan.steps.length}: ${r.message} Run the same command again to finish; it shows only what is left.`);
   for (const step of plan.steps) {
     let r: TripsResult<unknown>;
     switch (step.op) {
