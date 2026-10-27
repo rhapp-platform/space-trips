@@ -176,7 +176,7 @@ describe("apply: refusals", () => {
     expect(r.message).toContain("Item 1 (Hotel): “rooom” isn't a field of a hotel. A hotel takes: id, kind, name, start, start_tz, end, end_tz, address, phone, room, confirmation, notes, image.");
     expect(r.message).toContain("Item 2 (Back): “end” is before “start”. Check the two times and their time zones.");
     expect(r.message).toContain("Item 3 (Ferry): kind must be flight, hotel, activity, other.");
-    expect(r.message).toContain("Item 4 (Lunch): “start” isn't complete. Write it as a date and a 24-hour time, like 2027-03-14T08:05.");
+    expect(r.message).toContain("Item 4 (Lunch): “start” isn't complete. Write a date, like 2027-03-14, or a date and a 24-hour time, like 2027-03-14T08:05.");
     expect(r.message).toContain('Item 5: put “room” in quotes, like room = "412".');
     expect(r.message).toContain("Traveler 1: no active member of this space has the email or username “nobody@example.com”.");
     expect(r.message).toContain("Traveler 2 (lee): role must be traveler, owner, viewer.");

@@ -1,6 +1,6 @@
 /**
- * Item times are wall-clock times at the place ("2026-10-03T14:05"), as a
- * datetime-local field gives them. A time zone, when someone chose one, is kept
+ * Item times are wall-clock times at the place ("2026-10-03T14:05"), or a day
+ * alone ("2026-10-03") when there is no time. A time zone, when someone chose one, is kept
  * beside each time in `details` (start_tz, end_tz): a flight leaves in one zone
  * and lands in another. Without a zone a time is shown exactly as entered.
  */
@@ -52,6 +52,7 @@ export function zoneLabel(wall: string, zone: string): string {
 /** A time for people to read, with its zone when one was chosen. */
 export function when(wall: string | null | undefined, zone?: string | null): string {
   if (!wall) return "";
+  if (!wall.includes("T")) return wall;
   const text = wall.replace("T", " ");
   return zone ? `${text} (${zoneLabel(wall, zone)})` : text;
 }
@@ -61,6 +62,8 @@ export function when(wall: string | null | undefined, zone?: string | null): str
  * other one's; with no zones at all the wall clocks are compared, as before.
  */
 export function endsBeforeStart(start: string, startZone: string | null, end: string, endZone: string | null): boolean {
+  // With a day on either side, only the days can be compared.
+  if (!start.includes("T") || !end.includes("T")) return end.slice(0, 10) < start.slice(0, 10);
   const a = startZone ?? endZone, b = endZone ?? startZone;
   return a && b ? instant(end, b) < instant(start, a) : end < start;
 }

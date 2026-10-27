@@ -127,6 +127,19 @@ describe("tripView", () => {
     expect(v.travelers).toEqual({ count: 2, people: [{ name: "Dana Reyes", role: "Organizer" }, { name: "lee", role: "Traveler" }] });
   });
 
+  test("a day without a time sits on its day; another day's end says which", async () => {
+    const f = fixture({ visibility: "members", start_date: "2026-11-01" });
+    Object.assign(f.store.segments.get("tseg_hotel")!, { start_at: "2026-11-01", end_at: "2026-11-03" });
+    const r = await tripView(f.deps, TRAVELER, TRIP);
+    if (!r.ok || !r.value) throw new Error("expected a trip");
+    expect(r.value.unscheduled).toEqual([]);
+    const hotel = r.value.days[0]!.items.find((i) => i.kind === "hotel")!;
+    expect(hotel.when).toBe("Check-out Nov 3");
+    Object.assign(f.store.segments.get("tseg_hotel")!, { end_at: null });
+    const s = await tripView(f.deps, TRAVELER, TRIP);
+    expect(s.ok && s.value?.days[0]!.items.find((i) => i.kind === "hotel")!.when).toBeNull();
+  });
+
   test("an outsider gets no seat, room, confirmation or names", async () => {
     const f = fixture({ visibility: "public" });
     const r = await tripView(f.deps, OUT, TRIP);

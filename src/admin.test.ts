@@ -156,7 +156,8 @@ describe("Itinerary", () => {
 
     const editHtml = await (await f.request(`${BASE}/segments/${SEG}/edit`)).text();
     expect(editHtml).toContain('value="Flight to Denver"');
-    expect(editHtml).toContain('value="2026-11-01T08:30"');
+    expect(editHtml).toContain('name="start_on" value="2026-11-01"');
+    expect(editHtml).toContain('name="start_time" value="08:30"');
     const edit = await f.post(`${BASE}/segments/${SEG}/edit`, { ...SEG_FORM, type: "flight", label: "Flight to Boise" });
     expect(edit.headers.get("Location")).toBe(`${BASE}?done=segment-saved`);
     expect(f.segments.get(SEG)!.label).toBe("Flight to Boise");
@@ -550,5 +551,35 @@ describe("Public trip page: travelers", () => {
       expect(html.match(/A member/g)?.length).toBe(3);
       noSecrets(html);
     }
+  });
+});
+
+describe("an item with a day but no time", () => {
+  test("the form saves a bare day, drops its zone, and shows it again", async () => {
+    const f = fixture();
+    const r = await f.post(`${BASE}/segments/new`, { ...SEG_FORM, start_at: undefined as any, end_at: undefined as any,
+      start_on: "2026-11-01", start_time: "", end_on: "2026-11-03", end_time: "11:00", start_tz: "Europe/Rome", end_tz: "Europe/Rome" });
+    expect(r.status).toBe(303);
+    const write = f.writes().find((c) => c.op === "addSegment")!.args[2] as any;
+    expect(write.start_at).toBe("2026-11-01");
+    expect(write.end_at).toBe("2026-11-03T11:00");
+    expect(JSON.parse(JSON.stringify(write.details))).toEqual({ end_tz: "Europe/Rome" });
+  });
+
+  test("a time without a day, or a day that doesn't exist, is refused", async () => {
+    const f = fixture();
+    for (const [on, time] of [["", "09:00"], ["2026-02-30", ""]]) {
+      const r = await f.post(`${BASE}/segments/new`, { ...SEG_FORM, start_on: on!, start_time: time!, end_on: "", end_time: "" });
+      expect(r.status).toBe(400);
+      expect(await r.text()).toContain("isn&#39;t complete. Pick a date. Add a time if you know it.");
+    }
+    expect(f.writes()).toHaveLength(0);
+  });
+
+  test("a day-only end before the start is refused by day", async () => {
+    const f = fixture();
+    const r = await f.post(`${BASE}/segments/new`, { ...SEG_FORM, start_on: "2026-11-03", start_time: "15:00", end_on: "2026-11-01", end_time: "" });
+    expect(r.status).toBe(400);
+    expect(await r.text()).toContain("Check the two dates.");
   });
 });
