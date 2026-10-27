@@ -173,7 +173,7 @@ describe("apply: refusals", () => {
     expect(r.status).toBe(400);
     expect(r.message).toContain("things need fixing before anything is saved");
     expect(r.message).toContain("“colour” isn't a trip field");
-    expect(r.message).toContain("Item 1 (Hotel): “rooom” isn't a field of a hotel. A hotel takes: id, kind, name, start, start_tz, end, end_tz, address, phone, room, confirmation, notes.");
+    expect(r.message).toContain("Item 1 (Hotel): “rooom” isn't a field of a hotel. A hotel takes: id, kind, name, start, start_tz, end, end_tz, address, phone, room, confirmation, notes, image.");
     expect(r.message).toContain("Item 2 (Back): “end” is before “start”. Check the two times and their time zones.");
     expect(r.message).toContain("Item 3 (Ferry): kind must be flight, hotel, activity, other.");
     expect(r.message).toContain("Item 4 (Lunch): “start” isn't complete. Write it as a date and a 24-hour time, like 2027-03-14T08:05.");
@@ -293,5 +293,98 @@ describe("without a member directory", () => {
     expect(failure(await run("apply", { document, dryRun: true })).message).toContain("the member list can't be searched right now");
     expect(failure(await run("traveler-add", { trip: TRIP, member: "lee@example.com" })).status).toBe(503);
     expect(store.calls.some((c) => c.op === "setMember")).toBe(false);
+  });
+});
+
+describe("images", () => {
+  const REV = "a".repeat(64);
+  const REV2 = "b".repeat(64);
+  const withImages = (store: ReturnType<typeof fakeTrips>) => {
+    store.trips.set(TRIP, { ...store.trips.get(TRIP)!, cover_tag: "spring-cover", cover_revision: REV });
+    store.segments.set(SEG, { ...store.segments.get(SEG)!, image_tag: "plane", image_revision: REV });
+  };
+
+  test("export writes the cover and each item's image by tag, and the export applies with no changes", async () => {
+    const { run, store } = setup();
+    withImages(store);
+    const { document } = value(await run("show", { trip: TRIP }));
+    expect(document.cover).toBe("spring-cover");
+    expect(document.item[0].image).toBe("plane");
+    const dry = value(await run("apply", { document, dryRun: true }));
+    expect(dry.plan.steps).toEqual([]);
+    expect(dry.needs).toEqual([]);
+  });
+
+  test("a new tag needs a revision: the plan names it, then sets it once the CLI has pinned it", async () => {
+    const { run, store } = setup();
+    const { document } = value(await run("show", { trip: TRIP }));
+    document.cover = "denver-skyline";
+    document.item[0].image = "plane";
+    const first = value(await run("apply", { document, dryRun: true }));
+    expect(first.needs).toEqual(["denver-skyline", "plane"]);
+    expect(first.plan.steps).toEqual([]);
+    // Writing without the revisions is refused, and nothing is saved.
+    expect(failure(await run("apply", { document, expect: first.hash })).message).toContain("rhap images pin: denver-skyline, plane");
+    const revisions = { "denver-skyline": REV, plane: REV2 };
+    const second = value(await run("apply", { document, dryRun: true, revisions }));
+    expect(second.needs).toEqual([]);
+    expect(second.plan.steps.map((s: any) => [s.op, s.changes])).toEqual([["update-trip", ["cover"]], ["update-item", ["image"]]]);
+    value(await run("apply", { document, expect: second.hash, revisions }));
+    expect(store.trips.get(TRIP)).toMatchObject({ cover_tag: "denver-skyline", cover_revision: REV });
+    expect(store.segments.get(SEG)).toMatchObject({ image_tag: "plane", image_revision: REV2 });
+  });
+
+  test("the same tag is not a change, even with a newer revision; a missing line keeps the image", async () => {
+    const { run, store } = setup();
+    withImages(store);
+    const { document } = value(await run("show", { trip: TRIP }));
+    const dry = value(await run("apply", { document, dryRun: true, revisions: { plane: REV2, "spring-cover": REV2 } }));
+    expect(dry.plan.steps).toEqual([]);
+    delete document.cover;
+    delete document.item[0].image;
+    expect(value(await run("apply", { document, dryRun: true })).plan.steps).toEqual([]);
+  });
+
+  test("empty text removes an image", async () => {
+    const { run, store } = setup();
+    withImages(store);
+    const { document } = value(await run("show", { trip: TRIP }));
+    document.cover = "";
+    document.item[0].image = "";
+    await applied(run, document);
+    expect(store.trips.get(TRIP)).toMatchObject({ cover_tag: null, cover_revision: null });
+    expect(store.segments.get(SEG)).toMatchObject({ image_tag: null, image_revision: null });
+  });
+
+  test("a name that can't be a tag is refused, and a revision for the wrong shape is ignored", async () => {
+    const { run } = setup();
+    const { document } = value(await run("show", { trip: TRIP }));
+    document.item[0].image = "Hotel Monaco.jpg";
+    expect(failure(await run("apply", { document, dryRun: true })).message).toContain("image “Hotel Monaco.jpg” isn't an image name");
+    document.item[0].image = "monaco";
+    expect(value(await run("apply", { document, dryRun: true, revisions: { monaco: "not-a-revision" } })).needs).toEqual(["monaco"]);
+  });
+
+  test("single changes: an item and the trip take an image; empty text removes it", async () => {
+    const { run, store } = setup();
+    expect(failure(await run("item-edit", { trip: TRIP, item: "1", set: { image: "plane" } })).message).toContain("rhap images pin: plane");
+    value(await run("item-edit", { trip: TRIP, item: "1", set: { image: "plane" }, revisions: { plane: REV } }));
+    expect(store.segments.get(SEG)).toMatchObject({ image_tag: "plane", image_revision: REV });
+    value(await run("item-edit", { trip: TRIP, item: "1", set: { image: "" } }));
+    expect(store.segments.get(SEG)).toMatchObject({ image_tag: null, image_revision: null });
+    value(await run("edit", { trip: TRIP, set: { cover: "spring" }, revisions: { spring: REV } }));
+    expect(store.trips.get(TRIP)).toMatchObject({ cover_tag: "spring", cover_revision: REV });
+    value(await run("item-add", { trip: TRIP, item: { kind: "hotel", name: "Hotel Monaco", image: "monaco" }, revisions: { monaco: REV2 } }));
+    expect([...store.segments.values()].find((s) => s.label === "Hotel Monaco")).toMatchObject({ image_tag: "monaco", image_revision: REV2 });
+  });
+
+  test("an item without an id that matches a stored one keeps its image", async () => {
+    const { run, store } = setup();
+    withImages(store);
+    const { document } = value(await run("show", { trip: TRIP }));
+    delete document.item[0].id;
+    const dry = value(await run("apply", { document, dryRun: true }));
+    expect(dry.needs).toEqual([]);
+    expect(dry.plan.steps).toEqual([]);
   });
 });
