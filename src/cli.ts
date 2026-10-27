@@ -152,7 +152,7 @@ function imageSelection(tag: string | undefined, current: string | null | undefi
   if (tag === undefined) return "";
   if (tag === "") return current ? "null" : "";
   if (!IMAGE_TAG.test(tag)) {
-    ctx.errors.push(`${where}: ${field} “${tag}” isn't an image name. Names are lowercase letters, digits and hyphens. See them with: rhap images list`);
+    ctx.errors.push(`${where}: ${field} “${tag}” isn't an image name. Names are lowercase letters, digits and hyphens. See the live ones with: rhap images list --live`);
     return "";
   }
   if (tag === current) return "";
