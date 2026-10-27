@@ -252,14 +252,34 @@ function tripForm(s: Scope, action: string, values: Form, trip: TripRow | undefi
   </form>`;
 }
 
+/**
+ * The form asks for a day and, optionally, a time; the store keeps one value,
+ * "2026-10-19" or "2026-10-19T15:00". A time without a day stays incomplete,
+ * so segmentWrite refuses it.
+ */
+export function joinTimes(form: Form): Form {
+  const out = { ...form };
+  for (const side of ["start", "end"] as const) {
+    if (!(`${side}_on` in form) && !(`${side}_time` in form)) continue;
+    const day = form[`${side}_on`] ?? "", time = form[`${side}_time`] ?? "";
+    out[`${side}_at`] = time ? `${day}T${time}` : day;
+  }
+  return out;
+}
+
+const dayOf = (wall: string | null | undefined) => wall?.slice(0, 10) ?? "";
+const timeOf = (wall: string | null | undefined) => (wall?.includes("T") ? wall.slice(11, 16) : "");
+
 /** `zone` starts a new item's time zones: where the previous item ended. */
 function segmentFormValues(kind: Kind, seg?: SegmentRow, zone = ""): Form {
   const details = readDetails(seg?.details);
   return {
     type: kind.type,
     label: seg?.label ?? "",
-    start_at: seg?.start_at ?? "",
-    end_at: seg?.end_at ?? "",
+    start_on: dayOf(seg?.start_at),
+    start_time: timeOf(seg?.start_at),
+    end_on: dayOf(seg?.end_at),
+    end_time: timeOf(seg?.end_at),
     start_tz: seg ? (details.start_tz ?? "") : zone,
     end_tz: seg ? (details.end_tz ?? "") : zone,
     location: seg?.location ?? "",
@@ -300,8 +320,12 @@ function segmentForm(
     <input type="hidden" name="type" value="${esc(kind.type)}">
     ${field("label", "Name", input("label", values.label, 'required maxlength="200" autocomplete="off"'), `For example “${kind.example}”.`)}
     <div class="admin-pair">
-      ${field("start_at", kind.start, input("start_at", values.start_at, 'type="datetime-local"'))}
-      ${field("end_at", kind.end, input("end_at", values.end_at, 'type="datetime-local"'))}
+      ${field("start_on", kind.start, input("start_on", values.start_on ?? dayOf(values.start_at), 'type="date"'))}
+      ${field("start_time", "Time", input("start_time", values.start_time ?? timeOf(values.start_at), 'type="time"'), "Optional. Leave it empty when there's no set time.")}
+    </div>
+    <div class="admin-pair">
+      ${field("end_on", kind.end, input("end_on", values.end_on ?? dayOf(values.end_at), 'type="date"'))}
+      ${field("end_time", "Time", input("end_time", values.end_time ?? timeOf(values.end_at), 'type="time"'), "Optional.")}
     </div>
     <div class="admin-pair">
       ${field("start_tz", "Time zone", input("start_tz", values.start_tz ?? "", `list="tz-names" maxlength="${ZONE_MAX}" autocomplete="off" placeholder="Europe/Rome"`),
@@ -714,7 +738,7 @@ admin.post("/:id/segments/new", async (c) => {
   const kind = newKind(form.type);
   if (!kind) return c.redirect(path, 303);
   const heading = `Add a ${kind.name.toLowerCase()}`;
-  const { write, error } = segmentWrite(form, kind, s.gn);
+  const { write, error } = segmentWrite(joinTimes(form), kind, s.gn);
   if (!write) return segmentPage(s, trip, path, heading, kind, form, undefined, "Add to itinerary", error, 400);
   const result = await callTrips<SegmentRow>(c.env, s.gn, "addSegment", [newId("tseg_"), trip.id, write]);
   if (!result.ok) {
@@ -743,7 +767,7 @@ admin.post("/:id/segments/:sid/edit", async (c) => {
   const form = await readForm(c);
   // The kind is fixed once an item exists; the form can't change it.
   const kind = kindOf(segment!.type) ?? KINDS[KINDS.length - 1]!;
-  const { write, error } = segmentWrite(form, kind, s.gn);
+  const { write, error } = segmentWrite(joinTimes(form), kind, s.gn);
   if (!write) return segmentPage(s, trip, path, "Edit itinerary item", kind, form, segment, "Save item", error, 400);
   const result = await callTrips<SegmentRow>(c.env, s.gn, "updateSegment", [segment!.id, write]);
   if (!result.ok) {

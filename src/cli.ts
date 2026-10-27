@@ -60,7 +60,7 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
 
 const FILE_SAY: Say = {
   date: "Write it as year-month-day, like 2027-03-14.",
-  dateTime: "Write it as a date and a 24-hour time, like 2027-03-14T08:05.",
+  dateTime: "Write a date, like 2027-03-14, or a date and a 24-hour time, like 2027-03-14T08:05.",
   status: `status must be ${STATUSES.map(([v]) => v).join(", ")}.`,
   visibility: `visibility must be ${VISIBILITIES.map(([v]) => v).join(", ")}.`,
 };

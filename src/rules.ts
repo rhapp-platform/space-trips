@@ -67,7 +67,7 @@ export interface Say {
 
 export const FORM_SAY: Say = {
   date: "Pick it from the calendar.",
-  dateTime: "Pick a date and a time.",
+  dateTime: "Pick a date. Add a time if you know it.",
   status: "Choose a status from the list.",
   visibility: "Choose who can see this trip.",
 };
@@ -136,8 +136,11 @@ export function segmentWrite(form: Form, kind: Kind, gn: string, say: Say = FORM
   if (itemLabel.length > 200) return { error: "Keep the name to 200 characters or fewer." };
   const start = form.start_at ?? "";
   const end = form.end_at ?? "";
+  // A day without a time is fine: hotels and free days often have none.
   for (const [value, which] of [[start, kind.start], [end, kind.end]] as const) {
-    if (value && !DATETIME.test(value)) return { error: `“${which}” isn't complete. ${say.dateTime}` };
+    if (value && !((DATETIME.test(value) && validDate(value.slice(0, 10))) || validDate(value))) {
+      return { error: `“${which}” isn't complete. ${say.dateTime}` };
+    }
   }
   const zones: (string | null)[] = [];
   for (const [value, which] of [[form.start_tz, kind.start], [form.end_tz, kind.end]] as const) {
@@ -145,10 +148,11 @@ export function segmentWrite(form: Form, kind: Kind, gn: string, say: Say = FORM
     if (value?.trim() && !zone) return { error: `The time zone for “${which}” isn't one we recognise. Use a region and city, like “Europe/Rome” or “America/Chicago”.` };
     zones.push(zone);
   }
-  // A zone describes its time, so it is kept only alongside one.
-  const [startZone, endZone] = [start ? zones[0]! : null, end ? zones[1]! : null];
+  // A zone describes a time of day, so it is kept only alongside one; a bare
+  // day drops it (the form fills the zone in from the item before).
+  const [startZone, endZone] = [start.includes("T") ? zones[0]! : null, end.includes("T") ? zones[1]! : null];
   if (start && end && endsBeforeStart(start, startZone, end, endZone)) {
-    return { error: `“${kind.end}” is before “${kind.start}”. Check the two times${startZone || endZone ? " and their time zones" : ""}.` };
+    return { error: `“${kind.end}” is before “${kind.start}”. Check the two ${start.includes("T") && end.includes("T") ? "times" : "dates"}${startZone || endZone ? " and their time zones" : ""}.` };
   }
   const limits: [string, string, number][] = [
     ["confirmation_ref", "Confirmation number", 100],

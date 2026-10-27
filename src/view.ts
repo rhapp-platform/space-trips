@@ -108,10 +108,16 @@ function dayHeading(date: string, tripStart: string | null): string {
   return `Day ${Math.round((day(date).getTime() - day(tripStart).getTime()) / 86_400_000) + 1} · ${text}`;
 }
 
-/** One side of an item's time: label, the date when it isn't the item's day, the clock, the zone. */
+/**
+ * One side of an item's time: label, the date when it isn't the item's day,
+ * the clock and zone when there is a time. Empty for a bare day that is the
+ * item's own: the day heading already says it.
+ */
 function side(label: string, wall: string, zone: string | undefined, groupDate: string | null): string {
-  const date = wall.slice(0, 10) === groupDate ? "" : `${fmt(wall.slice(0, 10), { month: "short", day: "numeric" })}, `;
-  return `${label} ${date}${clock(wall)}${zone ? ` (${zoneLabel(wall, zone)})` : ""}`;
+  const timed = wall.includes("T");
+  const date = wall.slice(0, 10) === groupDate ? "" : fmt(wall.slice(0, 10), { month: "short", day: "numeric" });
+  if (!timed) return date ? `${label} ${date}` : "";
+  return `${label} ${date ? `${date}, ` : ""}${clock(wall)}${zone ? ` (${zoneLabel(wall, zone)})` : ""}`;
 }
 
 function item(seg: SegmentRow, insider: boolean, image: (tag: string, revision: string | null | undefined) => string): ItemView {
