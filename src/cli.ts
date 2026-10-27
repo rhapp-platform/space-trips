@@ -147,16 +147,25 @@ interface ImageContext {
   errors: string[];
 }
 
-/** The picker's `imageSelection` for a file's tag: "" keeps, "null" removes. */
-function imageSelection(tag: string | undefined, current: string | null | undefined, field: string, where: string, ctx: ImageContext): string {
+/**
+ * The picker's `imageSelection` for a file's tag: "" keeps, "null" removes.
+ * The tag it already shows is no change, so re-applying an export never
+ * re-freezes a picture. A single change that names the picture (`refresh`,
+ * with the stored revision) does take a newer frozen revision of the same tag:
+ * that's how a replaced library picture reaches the trip.
+ */
+function imageSelection(
+  tag: string | undefined, current: string | null | undefined, field: string, where: string, ctx: ImageContext,
+  refresh?: { revision: string | null | undefined },
+): string {
   if (tag === undefined) return "";
   if (tag === "") return current ? "null" : "";
   if (!IMAGE_TAG.test(tag)) {
     ctx.errors.push(`${where}: ${field} “${tag}” isn't an image name. Names are lowercase letters, digits and hyphens. See the live ones with: rhap images list --live`);
     return "";
   }
-  if (tag === current) return "";
   const revision = ctx.revisions[tag];
+  if (tag === current && !(refresh && revision && revision !== refresh.revision)) return "";
   if (!revision) {
     ctx.needs.add(tag);
     return "";
@@ -308,9 +317,12 @@ interface Plan {
 
 const TRIP_FIELDS = ["title", "description", "start_date", "end_date", "status", "visibility"] as const;
 
-/** A planned image change: the write carries the tag, so compare tags (a newer revision of the same tag isn't a change). */
-const imageChanged = (write: Record<string, unknown>, key: string, stored: string | null | undefined) =>
-  key in write && !same(write[key], stored);
+/**
+ * A planned image change. The write carries the picture only when imageSelection
+ * chose one, so a write of the same tag means a refreshed revision.
+ */
+const imageChanged = (write: Record<string, unknown>, [tagKey, revisionKey]: [string, string], stored: { tag?: string | null; revision?: string | null }) =>
+  tagKey in write && (!same(write[tagKey], stored.tag) || !same(write[revisionKey], stored.revision));
 
 /** Text the same whether a value is missing or empty. */
 const same = (a: unknown, b: unknown) => (a ?? null) === (b ?? null) || (!a && !b);
@@ -332,7 +344,7 @@ function itemChanges(write: Record<string, unknown>, seg: SegmentRow, kind: Kind
   if (loc && "location" in write && !same(write.location, seg.location)) changes.push(loc);
   if (!same(write.confirmation_ref, seg.confirmation_ref)) changes.push("confirmation");
   if (!same(write.notes, seg.notes)) changes.push("notes");
-  if (imageChanged(write, "image_tag", seg.image_tag)) changes.push("image");
+  if (imageChanged(write, ["image_tag", "image_revision"], { tag: seg.image_tag, revision: seg.image_revision })) changes.push("image");
   if (!sameDetails(write.details, seg.details)) {
     const a = (write.details ?? {}) as Record<string, string>;
     const b = readDetails(seg.details);
@@ -356,7 +368,13 @@ async function resolveTraveler(deps: CliDeps, ref: string, onTrip: MemberRow[], 
   }
 }
 
-async function buildPlan(deps: CliDeps, gn: string, raw: unknown, options: { prune: boolean; allowNew: boolean; revisions?: Record<string, string> }): Promise<Plan> {
+/** Which pictures a single change names, so a newer revision of the same tag counts (see imageSelection). */
+interface Refresh {
+  cover?: boolean;
+  item?: string;
+}
+
+async function buildPlan(deps: CliDeps, gn: string, raw: unknown, options: { prune: boolean; allowNew: boolean; revisions?: Record<string, string>; refresh?: Refresh }): Promise<Plan> {
   const plan: Plan = { steps: [], kept: [], hints: [], errors: [], needs: [], current: null };
   const errors = plan.errors;
   const images: ImageContext = { gn, revisions: options.revisions ?? {}, needs: new Set(), errors };
@@ -399,13 +417,14 @@ async function buildPlan(deps: CliDeps, gn: string, raw: unknown, options: { pru
   plan.current = current;
 
   // The trip's own fields.
-  const cover = imageSelection(header.cover, current?.trip.cover_tag, "cover", "The trip", images);
+  const cover = imageSelection(header.cover, current?.trip.cover_tag, "cover", "The trip", images,
+    options.refresh?.cover && current ? { revision: current.trip.cover_revision } : undefined);
   const trip = tripWrite(tripForm(header as TripDocument, current?.trip ?? null, cover), gn, FILE_SAY);
   if (!trip.write) errors.push(trip.error!);
   else if (!current) plan.steps.push({ op: "create-trip", title: String(trip.write.title), write: trip.write });
   else {
     const changes: string[] = TRIP_FIELDS.filter((f) => !same(trip.write![f], current!.trip[f]));
-    if (imageChanged(trip.write, "cover_tag", current.trip.cover_tag)) changes.push("cover");
+    if (imageChanged(trip.write, ["cover_tag", "cover_revision"], { tag: current.trip.cover_tag, revision: current.trip.cover_revision })) changes.push("cover");
     if (changes.length) plan.steps.push({ op: "update-trip", changes, write: trip.write });
   }
 
@@ -439,7 +458,8 @@ async function buildPlan(deps: CliDeps, gn: string, raw: unknown, options: { pru
     // The stored item this one will match (below, by kind + name + start when it has no id), for its image.
     const twin = seg ?? segments.find((s) => !claimed.has(s.id) && !named.has(s.id) && s.type === kind.type &&
       s.label.toLowerCase() === (item.name ?? "").toLowerCase() && same(s.start_at, item.start || null));
-    const image = imageSelection(item.image, twin?.image_tag, "image", where, images);
+    const image = imageSelection(item.image, twin?.image_tag, "image", where, images,
+      twin && options.refresh?.item === twin.id ? { revision: twin.image_revision } : undefined);
     const result = segmentWrite(itemForm(item, kind, image), fileKind(kind), gn, FILE_SAY);
     if (!result.write) return void errors.push(`${where}: ${result.error}`);
     const write = result.write;
@@ -590,7 +610,7 @@ async function runPlan(deps: CliDeps, gn: string, actor: string, plan: Plan): Pr
 
 async function applyDocument(
   deps: CliDeps, gn: string, actor: string, doc: unknown,
-  options: { prune: boolean; allowNew: boolean; dryRun: boolean; expect?: string; revisions?: Record<string, string> },
+  options: { prune: boolean; allowNew: boolean; dryRun: boolean; expect?: string; revisions?: Record<string, string>; refresh?: Refresh },
 ): Promise<CliResult> {
   const plan = await buildPlan(deps, gn, doc, options);
   if (plan.errors.length) {
@@ -687,7 +707,9 @@ export async function cliOp(deps: CliDeps, gn: string, actor: string, op: string
     case "edit": {
       const set = object(input.set);
       if ("id" in set) return no(400, "A trip's id can't change.");
-      return applyDocument(deps, gn, actor, merged(header, set), { prune: false, allowNew: false, dryRun: false, revisions: revisionsOf(input.revisions) });
+      return applyDocument(deps, gn, actor, merged(header, set), {
+        prune: false, allowNew: false, dryRun: false, revisions: revisionsOf(input.revisions), refresh: { cover: "cover" in set },
+      });
     }
 
     case "delete": {
@@ -714,7 +736,9 @@ export async function cliOp(deps: CliDeps, gn: string, actor: string, op: string
         return no(400, "An item's kind can't change. Add a new item of the other kind and remove this one.");
       }
       const items = (document.item ?? []).map((it) => (it.id === seg.id ? merged(it, set) : it));
-      return applyDocument(deps, gn, actor, { ...header, item: items }, { prune: false, allowNew: false, dryRun: false, revisions: revisionsOf(input.revisions) });
+      return applyDocument(deps, gn, actor, { ...header, item: items }, {
+        prune: false, allowNew: false, dryRun: false, revisions: revisionsOf(input.revisions), refresh: { item: "image" in set ? seg.id : undefined },
+      });
     }
 
     case "item-remove": {
