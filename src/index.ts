@@ -10,13 +10,14 @@
 import { Hono } from "hono";
 import { escapeHtml as esc, readSpaceRecord, renderState, resolveSpaceName } from "../../space-surface/src";
 import { artworkUrl } from "../../home/src/image-field";
-import { admin, canManageTrips } from "./admin";
+import { admin } from "./admin";
 import { kindOf, readDetails, shownDetails } from "./kinds";
 import { when } from "./time";
 import { people, type Person } from "./people";
 import { callTrips } from "./trips";
 import { notAvailable, page, scope, unavailable, type Scope } from "./scope";
 import { SURFACE } from "./surface";
+import { access } from "./view";
 import type { Env, MemberRow, SegmentRow, TripDetail, TripRow } from "./types";
 
 const app = new Hono<{ Bindings: Env }>();
@@ -248,21 +249,12 @@ app.get("/trips/:id", async (c) => {
 
   const { trip, members } = result.value;
 
-  // Drafts are for staff only: they preview one from the admin's
-  // "View as a visitor" link. Everyone else gets the same page as a missing trip.
-  const staff = canManageTrips(s.viewer.role);
+  // The same gate as a trip app (view.ts); space-store serves raw rows. Drafts
+  // are for staff, who preview one from the admin's "View as a visitor" link.
+  // Everyone the gate refuses gets the same page as a missing trip.
+  const allowed = access(trip, members, s.viewer);
+  if (!allowed) return notAvailable(s, path);
   const draft = trip.status === "draft";
-  if (draft && !staff) return notAvailable(s, path);
-  const onTrip = Boolean(s.viewer.uid && members.some((m: MemberRow) => m.member_id === s.viewer.uid));
-
-  // Enforce visibility gate in the surface worker (space-store serves raw data).
-  if (trip.visibility === "private") {
-    if (!s.viewer.uid || !members.some((m: MemberRow) => m.member_id === s.viewer.uid)) {
-      return notAvailable(s, path);
-    }
-  } else if (trip.visibility === "members" && !s.viewer.signedIn) {
-    return notAvailable(s, path);
-  }
 
   return page(s, {
     title: trip.title,
@@ -272,8 +264,8 @@ app.get("/trips/:id", async (c) => {
     // Drafts, private and members-only trips must never be edge-cached.
     cache: draft ? "no-store" : trip.visibility === "public" ? s.cache : "private",
     description: trip.description?.slice(0, 300) ?? undefined,
-    content: renderTripDetail(result.value, s.gn, s.environment, staff || onTrip,
-      staff || onTrip ? await travelerNames(c.env, s.gn, members) : null),
+    content: renderTripDetail(result.value, s.gn, s.environment, allowed.insider,
+      allowed.insider ? await travelerNames(c.env, s.gn, members) : null),
   });
 });
 

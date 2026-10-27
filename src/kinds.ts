@@ -16,6 +16,8 @@ export interface DetailField {
 export interface Kind {
   type: SegmentRow["type"];
   name: string;
+  /** An `mdi:` icon name, for designs that show one per kind. */
+  icon: string;
   /** Placeholder-style example for the item's name. */
   example: string;
   start: string;
@@ -31,6 +33,7 @@ export const DETAIL_MAX = 300;
 export const KINDS: Kind[] = [
   {
     type: "flight",
+    icon: "mdi:airplane",
     name: "Flight",
     example: "Flight to Denver",
     start: "Departs",
@@ -46,6 +49,7 @@ export const KINDS: Kind[] = [
   },
   {
     type: "hotel",
+    icon: "mdi:bed",
     name: "Hotel",
     example: "Hotel Monaco",
     start: "Check-in",
@@ -58,6 +62,7 @@ export const KINDS: Kind[] = [
   },
   {
     type: "activity",
+    icon: "mdi:ticket",
     name: "Activity",
     example: "Museum tour",
     start: "Starts",
@@ -70,6 +75,7 @@ export const KINDS: Kind[] = [
   },
   {
     type: "other",
+    icon: "mdi:map-marker",
     name: "Other",
     example: "Free afternoon",
     start: "Starts",
@@ -82,6 +88,7 @@ export const KINDS: Kind[] = [
 /** Not offered for new items; kept so items saved as cars still edit and show. */
 const CAR: Kind = {
   type: "car",
+  icon: "mdi:car",
   name: "Car",
   example: "Rental car",
   start: "Pick-up",
