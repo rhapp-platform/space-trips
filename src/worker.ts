@@ -4,8 +4,9 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import { cliOp, type CliResult } from "./cli";
 import { people } from "./people";
 import { callTrips } from "./trips";
+import { tripView, type AccessOptions, type Looker, type TripView } from "./view";
 import app from "./index";
-import type { Env } from "./types";
+import type { Env, TripsResult } from "./types";
 
 /**
  * `rhap trips`, bound by the my-rhapp-app gateway only. The gateway has
@@ -20,6 +21,33 @@ export class TripsCli extends WorkerEntrypoint<Env> {
     return cliOp(
       { call: (operation, args = []) => callTrips(env, gn, operation, args), people: people(env, gn) },
       gn, actor, String(op), input && typeof input === "object" && !Array.isArray(input) ? input : {},
+    );
+  }
+}
+
+const GN = /^[a-z0-9][a-z0-9_-]{0,62}$/;
+const TRP = /^trp_[0-9A-Za-z]{26}$/;
+
+/**
+ * The finished trip for one viewer, for the registry's `trip/1` reference
+ * (app-design-registry ADR 0007). Bound by rhapp-app only, which has read the
+ * viewer's role session for `gn`: this entrypoint trusts `viewer` and decides
+ * everything else through the same gate as the trip page. `null` = missing or
+ * not for this viewer, deliberately indistinguishable.
+ */
+export class TripsView extends WorkerEntrypoint<Env> {
+  async view(gn: string, viewer: Looker, tripId: string, options: AccessOptions = {}): Promise<TripsResult<TripView | null>> {
+    if (typeof gn !== "string" || !GN.test(gn)) return { ok: false, status: 400, message: "Invalid space name." };
+    if (typeof tripId !== "string" || !TRP.test(tripId)) return { ok: true, value: null };
+    const looker: Looker = {
+      uid: typeof viewer?.uid === "string" && viewer.uid ? viewer.uid : null,
+      role: typeof viewer?.role === "string" && viewer.role ? viewer.role : null,
+      signedIn: viewer?.signedIn === true,
+    };
+    const env = this.env;
+    return tripView(
+      { call: (op, args) => callTrips(env, gn, op, args), people: people(env, gn), gn, environment: env.ENVIRONMENT },
+      looker, tripId, { hideArchived: options?.hideArchived !== false },
     );
   }
 }
