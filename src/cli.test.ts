@@ -378,6 +378,24 @@ describe("images", () => {
     expect([...store.segments.values()].find((s) => s.label === "Hotel Monaco")).toMatchObject({ image_tag: "monaco", image_revision: REV2 });
   });
 
+  test("a single change that names the same tag takes its newer frozen revision; other changes leave it", async () => {
+    const { run, store } = setup();
+    withImages(store);
+    // The library picture was replaced and frozen again: naming it moves the trip to the new one.
+    expect(value(await run("edit", { trip: TRIP, set: { cover: "spring-cover" }, revisions: { "spring-cover": REV2 } })).changes).toBe(1);
+    expect(store.trips.get(TRIP)).toMatchObject({ cover_tag: "spring-cover", cover_revision: REV2 });
+    expect(value(await run("item-edit", { trip: TRIP, item: "1", set: { image: "plane" }, revisions: { plane: REV2 } })).changes).toBe(1);
+    expect(store.segments.get(SEG)).toMatchObject({ image_tag: "plane", image_revision: REV2 });
+    // The revision it already shows is nothing to change.
+    expect(value(await run("item-edit", { trip: TRIP, item: "1", set: { image: "plane" }, revisions: { plane: REV2 } })).changes).toBe(0);
+    // A change that doesn't name the picture never moves it.
+    store.segments.set(SEG, { ...store.segments.get(SEG)!, image_revision: REV });
+    value(await run("item-edit", { trip: TRIP, item: "1", set: { notes: "Window seat" }, revisions: { plane: REV2 } }));
+    expect(store.segments.get(SEG)).toMatchObject({ image_tag: "plane", image_revision: REV });
+    value(await run("edit", { trip: TRIP, set: { title: "Spring 2027" }, revisions: { "spring-cover": REV } }));
+    expect(store.trips.get(TRIP)).toMatchObject({ cover_tag: "spring-cover", cover_revision: REV2 });
+  });
+
   test("an item without an id that matches a stored one keeps its image", async () => {
     const { run, store } = setup();
     withImages(store);
