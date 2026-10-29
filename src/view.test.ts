@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { sign } from "hono/jwt";
 import { app } from "./index";
 import { people } from "./people";
-import { access, clock, tripDates, tripView, type Looker } from "./view";
+import { access, clock, tripChoices, tripDates, tripView, type Looker } from "./view";
 import type { Env, MemberRow, TripRow } from "./types";
 import { SEG, TRIP, fakeMemberAccounts, fakeTrips } from "./testing";
 
@@ -183,4 +183,22 @@ test("dates and clocks", () => {
   expect(tripDates("2026-10-19", null)).toBe("From October 19, 2026");
   expect(tripDates(null, null)).toBeNull();
   expect([clock("2026-10-19T00:05"), clock("2026-10-19T12:00"), clock("2026-10-19T23:59")]).toEqual(["12:05 AM", "12:00 PM", "11:59 PM"]);
+});
+
+describe("tripChoices", () => {
+  test("staff see every trip, any status, as the picker lists it; nobody else sees any", async () => {
+    const f = fixture({ visibility: "private", status: "draft" });
+    const r = await tripChoices(f.deps, STAFF);
+    if (!r.ok) throw new Error("expected trips");
+    // The fixture store holds a second trip, in another status and visibility.
+    expect(r.value.map((t) => [t.id, t.status, t.visibility])).toEqual([[TRIP, "draft", "private"], [`trp_${"B".repeat(26)}`, "active", "members"]]);
+    expect(Object.keys(r.value[0]!).sort()).toEqual(["dates", "id", "status", "title", "visibility"]);
+    for (const viewer of [OUT, TRAVELER, { uid: "su_x", role: "member", signedIn: true }, { uid: null, role: "owner", signedIn: true }])
+      expect(await tripChoices(f.deps, viewer)).toEqual({ ok: true, value: [] });
+  });
+  test("an outage is an outage, not an empty space", async () => {
+    const f = fixture({});
+    const down = { ...f.deps, call: async () => ({ ok: false as const, status: 503, message: "down" }) };
+    expect((await tripChoices(down, STAFF)).ok).toBe(false);
+  });
 });
