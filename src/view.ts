@@ -220,3 +220,29 @@ export async function tripView(deps: ViewDeps, viewer: Looker, tripId: string, o
   }
   return { ok: true, value: project(result.value, allowed.insider, names, deps) };
 }
+
+// ── Choosing a trip ──────────────────────────────────────────────────────────
+
+/** One trip as the editor's trip picker lists it. */
+export interface TripChoice {
+  id: string;
+  title: string;
+  dates: string | null;
+  status: TripRow["status"];
+  visibility: TripRow["visibility"];
+}
+
+/**
+ * Every trip of the space, any status, for someone who may manage trips
+ * (the same rule as Manage trips); an empty list for anyone else. A trip app
+ * (ADR 0007) is made by staff, so the picker shows what Manage trips shows.
+ */
+export async function tripChoices(deps: Pick<ViewDeps, "call" | "gn">, viewer: Looker): Promise<TripsResult<TripChoice[]>> {
+  if (!canManageTrips(viewer.role)) return { ok: true, value: [] };
+  const result = await deps.call<TripRow[]>("list", [deps.gn]);
+  if (!result.ok) return result;
+  return {
+    ok: true,
+    value: result.value.map((t) => ({ id: t.id, title: t.title, dates: tripDates(t.start_date, t.end_date), status: t.status, visibility: t.visibility })),
+  };
+}

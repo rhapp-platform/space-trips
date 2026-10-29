@@ -4,7 +4,7 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import { cliOp, type CliResult } from "./cli";
 import { people } from "./people";
 import { callTrips } from "./trips";
-import { tripView, type AccessOptions, type Looker, type TripView } from "./view";
+import { tripChoices, tripView, type AccessOptions, type Looker, type TripChoice, type TripView } from "./view";
 import app from "./index";
 import type { Env, TripsResult } from "./types";
 
@@ -49,6 +49,18 @@ export class TripsView extends WorkerEntrypoint<Env> {
       { call: (op, args) => callTrips(env, gn, op, args), people: people(env, gn), gn, environment: env.ENVIRONMENT },
       looker, tripId, { hideArchived: options?.hideArchived !== false },
     );
+  }
+
+  /** The space's trips for the editor's trip picker: staff only, otherwise empty. */
+  async list(gn: string, viewer: Looker): Promise<TripsResult<TripChoice[]>> {
+    if (typeof gn !== "string" || !GN.test(gn)) return { ok: false, status: 400, message: "Invalid space name." };
+    const looker: Looker = {
+      uid: typeof viewer?.uid === "string" && viewer.uid ? viewer.uid : null,
+      role: typeof viewer?.role === "string" && viewer.role ? viewer.role : null,
+      signedIn: viewer?.signedIn === true,
+    };
+    const env = this.env;
+    return tripChoices({ call: (op, args) => callTrips(env, gn, op, args), gn }, looker);
   }
 }
 
