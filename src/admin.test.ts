@@ -583,3 +583,10 @@ describe("an item with a day but no time", () => {
     expect(await r.text()).toContain("Check the two dates.");
   });
 });
+
+test("an Admin can make an app for the trip; Staff cannot create apps and are not offered it (ADR 0007)", async () => {
+  const f = fixture();
+  const link = `<a href="/manage/apps/new?trip=${TRIP}">Make an app for this trip</a>`;
+  expect(await (await f.request(BASE, {}, { role: "staff-admin" })).text()).toContain(link);
+  expect(await (await f.request(BASE)).text()).not.toContain("Make an app for this trip");
+});

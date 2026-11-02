@@ -570,6 +570,7 @@ admin.get("/:id", async (c) => {
      <div class="admin-actions">
        <a href="${base}/edit">Edit trip</a>
        <a href="/trips/${esc(id)}">View as a visitor</a>
+       ${s.viewer.role === "staff-admin" ? `<a href="/manage/apps/new?trip=${esc(id)}">Make an app for this trip</a>` : ""}
        <a href="${base}/delete">Delete trip</a>
      </div>
      <div class="admin-section"><h2>Itinerary (${segments.length})</h2></div>
